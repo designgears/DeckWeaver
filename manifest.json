@@ -2,7 +2,7 @@
   "version": "0.1.0-alpha",
   "id": "com_designgears_DeckWeaver",
   "name": "plugin.name",
-  "thumbnail": "",
+  "thumbnail": "store/Thumbnail.png",
   "app-version": "1.5.0-beta.12",
   "author": "DesignGears",
   "github": "https://github.com/designgears/DeckWeaver",
