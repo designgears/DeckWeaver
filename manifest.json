@@ -1,24 +1,24 @@
 {
   "version": "0.1.0-alpha",
   "id": "com_designgears_DeckWeaver",
-  "name": "plugin.name",
+  "name": "DeckWeaver",
   "thumbnail": "store/Thumbnail.png",
   "app-version": "1.5.0-beta.12",
   "author": "DesignGears",
   "github": "https://github.com/designgears/DeckWeaver",
   "descriptions": {
-    "en_US": "plugin.description",
-    "es_ES": "plugin.description",
-    "zh_CN": "plugin.description",
-    "fr_FR": "plugin.description", 
-    "de_DE": "plugin.description"
+    "en_US": "Control PipeWeaver virtual audio devices from your Stream Deck",
+    "es_ES": "Controla dispositivos de audio virtuales de PipeWeaver desde tu Stream Deck",
+    "zh_CN": "从您的 Stream Deck 控制 PipeWeaver 虚拟音频设备",
+    "fr_FR": "Contrôlez les périphériques audio virtuels de PipeWeaver depuis votre Stream Deck", 
+    "de_DE": "Steuern Sie PipeWeaver virtuelle Audiogeräte von Ihrem Stream Deck"
   },
   "short-descriptions": {
-    "en_US": "plugin.short_description",
-    "es_ES": "plugin.short_description",
-    "zh_CN": "plugin.short_description",
-    "fr_FR": "plugin.short_description",
-    "de_DE": "plugin.short_description"
+    "en_US": "Audio control for PipeWeaver",
+    "es_ES": "Control de audio para PipeWeaver",
+    "zh_CN": "PipeWeaver 的音频控制",
+    "fr_FR": "Contrôle audio pour PipeWeaver",
+    "de_DE": "Audio Steuerung für PipeWeaver"
   },
   "tags": ["audio", "control", "pipeweaver", "virtual"],
   "minimum-app-version": "1.5.0-beta.12"
