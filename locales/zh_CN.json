@@ -1,0 +1,50 @@
+{
+    "plugin.name": "DeckWeaver",
+    "plugin.description": "从您的 Stream Deck 控制 PipeWeaver 虚拟音频设备",
+    "plugin.short_description": "PipeWeaver 的音频控制",
+    
+    "settings.language.label": "语言",
+    "settings.language.auto": "自动检测",
+    
+    "settings.language.name.auto": "自动检测",
+    "settings.language.name.en_US": "English (US)",
+    "settings.language.name.es_ES": "Español",
+    "settings.language.name.zh_CN": "简体中文",
+    "settings.language.name.fr_FR": "Français",
+    "settings.language.name.de_DE": "Deutsch",
+    
+    "actions.knob.name": "PipeWeaver 旋钮",
+    "actions.knob.tooltip": "使用旋钮/拨盘控制 PipeWeaver 音频",
+    
+    "ui.error.not_running.title": "PipeWeaver 未运行",
+    "ui.error.not_running.subtitle": "请启动 PipeWeaver 守护进程以配置此操作",
+    
+    "ui.device.title": "设备",
+    
+    "ui.mix_selection.title": "混音选择",
+    "ui.mix_a.title": "混音 A",
+    "ui.mix_b.title": "混音 B",
+    
+    "ui.custom_icon.title": "自定义图标",
+    "ui.custom_icon.subtitle": "选择自定义图标文件或使用已安装图标库中的图标",
+    "ui.icon_library_name.title": "图标库名称",
+    "ui.custom_icon_file.title": "自定义图标文件",
+    "ui.custom_icon_file.subtitle": "为图标选择自定义图像文件",
+    "ui.custom_icon_file.selected": "已选择：{filename}",
+    
+    "ui.volume_step.title": "音量步长",
+    "ui.volume_step.subtitle": "每次拨盘步长的音量变化（1-20%）",
+    
+    "ui.refresh_devices.button": "刷新设备",
+    
+    "ui.mute_targets.title": "静音目标",
+    "ui.mute_to_all.title": "全部静音",
+    "ui.na_target.title": "N/A（目标设备）",
+    "ui.no_targets_available.title": "无可用目标",
+    "ui.failed_get_status.title": "获取状态失败",
+    "ui.error_loading_targets.title": "加载目标时出错",
+    
+    "ui.choose_file.button": "选择文件",
+    "ui.change_file.button": "更改文件",
+    "ui.remove_icon.button": "移除图标"
+}

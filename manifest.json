@@ -1,0 +1,25 @@
+{
+  "version": "0.1.0-alpha",
+  "id": "com_designgears_DeckWeaver",
+  "name": "plugin.name",
+  "thumbnail": "",
+  "app-version": "1.5.0-beta.12",
+  "author": "DesignGears",
+  "github": "https://github.com/designgears/DeckWeaver",
+  "descriptions": {
+    "en_US": "plugin.description",
+    "es_ES": "plugin.description",
+    "zh_CN": "plugin.description",
+    "fr_FR": "plugin.description", 
+    "de_DE": "plugin.description"
+  },
+  "short-descriptions": {
+    "en_US": "plugin.short_description",
+    "es_ES": "plugin.short_description",
+    "zh_CN": "plugin.short_description",
+    "fr_FR": "plugin.short_description",
+    "de_DE": "plugin.short_description"
+  },
+  "tags": ["audio", "control", "pipeweaver", "virtual"],
+  "minimum-app-version": "1.5.0-beta.12"
+}

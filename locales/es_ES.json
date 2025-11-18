@@ -1,0 +1,50 @@
+{
+    "plugin.name": "DeckWeaver",
+    "plugin.description": "Controla dispositivos de audio virtuales de PipeWeaver desde tu Stream Deck",
+    "plugin.short_description": "Control de audio para PipeWeaver",
+    
+    "settings.language.label": "Idioma",
+    "settings.language.auto": "Detectar automáticamente",
+    
+    "settings.language.name.auto": "Detección automática",
+    "settings.language.name.en_US": "English (US)",
+    "settings.language.name.es_ES": "Español",
+    "settings.language.name.zh_CN": "简体中文",
+    "settings.language.name.fr_FR": "Français",
+    "settings.language.name.de_DE": "Deutsch",
+    
+    "actions.knob.name": "Perilla PipeWeaver",
+    "actions.knob.tooltip": "Controla el audio de PipeWeaver con la perilla/dial",
+    
+    "ui.error.not_running.title": "PipeWeaver No Está Ejecutándose",
+    "ui.error.not_running.subtitle": "Por favor inicia el demonio de PipeWeaver para configurar esta acción",
+    
+    "ui.device.title": "Dispositivo",
+    
+    "ui.mix_selection.title": "Selección de Mezcla",
+    "ui.mix_a.title": "Mezcla A",
+    "ui.mix_b.title": "Mezcla B",
+    
+    "ui.custom_icon.title": "Icono Personalizado",
+    "ui.custom_icon.subtitle": "Selecciona un archivo de icono personalizado o usa un icono de una biblioteca instalada",
+    "ui.icon_library_name.title": "Nombre de Biblioteca de Iconos",
+    "ui.custom_icon_file.title": "Archivo de Icono Personalizado",
+    "ui.custom_icon_file.subtitle": "Selecciona un archivo de imagen personalizado para el icono",
+    "ui.custom_icon_file.selected": "Seleccionado: {filename}",
+    
+    "ui.volume_step.title": "Paso de Volumen",
+    "ui.volume_step.subtitle": "Cambio de volumen por paso del dial (1-20%)",
+    
+    "ui.refresh_devices.button": "Actualizar Dispositivos",
+    
+    "ui.mute_targets.title": "Objetivos de Silencio",
+    "ui.mute_to_all.title": "Silenciar Todo",
+    "ui.na_target.title": "N/A (Dispositivo Objetivo)",
+    "ui.no_targets_available.title": "No hay objetivos disponibles",
+    "ui.failed_get_status.title": "Error al Obtener Estado",
+    "ui.error_loading_targets.title": "Error al Cargar Objetivos",
+    
+    "ui.choose_file.button": "Elegir Archivo",
+    "ui.change_file.button": "Cambiar Archivo",
+    "ui.remove_icon.button": "Eliminar Icono"
+}

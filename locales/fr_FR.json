@@ -1,0 +1,50 @@
+{
+    "plugin.name": "DeckWeaver",
+    "plugin.description": "Contrôlez les périphériques audio virtuels de PipeWeaver depuis votre Stream Deck",
+    "plugin.short_description": "Contrôle audio pour PipeWeaver",
+    
+    "settings.language.label": "Langue",
+    "settings.language.auto": "Détection automatique",
+    
+    "settings.language.name.auto": "Détection automatique",
+    "settings.language.name.en_US": "English (US)",
+    "settings.language.name.es_ES": "Español",
+    "settings.language.name.zh_CN": "简体中文",
+    "settings.language.name.fr_FR": "Français",
+    "settings.language.name.de_DE": "Deutsch",
+    
+    "actions.knob.name": "Molette PipeWeaver",
+    "actions.knob.tooltip": "Contrôlez l'audio PipeWeaver avec la molette/dial",
+    
+    "ui.error.not_running.title": "PipeWeaver N'est Pas En Cours",
+    "ui.error.not_running.subtitle": "Veuillez démarrer le démon PipeWeaver pour configurer cette action",
+    
+    "ui.device.title": "Périphérique",
+    
+    "ui.mix_selection.title": "Sélection Mix",
+    "ui.mix_a.title": "Mix A",
+    "ui.mix_b.title": "Mix B",
+    
+    "ui.custom_icon.title": "Icône Personnalisée",
+    "ui.custom_icon.subtitle": "Sélectionnez un fichier d'icône personnalisé ou utilisez une icône d'une bibliothèque installée",
+    "ui.icon_library_name.title": "Nom Bibliothèque Icônes",
+    "ui.custom_icon_file.title": "Fichier Icône Personnalisé",
+    "ui.custom_icon_file.subtitle": "Sélectionnez un fichier d'image personnalisé pour l'icône",
+    "ui.custom_icon_file.selected": "Sélectionné: {filename}",
+    
+    "ui.volume_step.title": "Pas Volume",
+    "ui.volume_step.subtitle": "Changement de volume par pas du cadran (1-20%)",
+    
+    "ui.refresh_devices.button": "Actualiser Périphériques",
+    
+    "ui.mute_targets.title": "Cibles Sourdine",
+    "ui.mute_to_all.title": "Sourdine Tout",
+    "ui.na_target.title": "N/A (Périphérique Cible)",
+    "ui.no_targets_available.title": "Aucune cible disponible",
+    "ui.failed_get_status.title": "Échec Obtention Statut",
+    "ui.error_loading_targets.title": "Erreur Chargement Cibles",
+    
+    "ui.choose_file.button": "Choisir Fichier",
+    "ui.change_file.button": "Changer Fichier",
+    "ui.remove_icon.button": "Supprimer Icône"
+}

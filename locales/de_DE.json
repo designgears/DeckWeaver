@@ -1,0 +1,50 @@
+{
+    "plugin.name": "DeckWeaver",
+    "plugin.description": "Steuern Sie PipeWeaver virtuelle Audiogeräte von Ihrem Stream Deck",
+    "plugin.short_description": "Audio Steuerung für PipeWeaver",
+    
+    "settings.language.label": "Sprache",
+    "settings.language.auto": "Automatische Erkennung",
+    
+    "settings.language.name.auto": "Automatische Erkennung",
+    "settings.language.name.en_US": "English (US)",
+    "settings.language.name.es_ES": "Español",
+    "settings.language.name.zh_CN": "简体中文",
+    "settings.language.name.fr_FR": "Français",
+    "settings.language.name.de_DE": "Deutsch",
+    
+    "actions.knob.name": "PipeWeaver Knopf",
+    "actions.knob.tooltip": "PipeWeaver Audio mit Knopf/Dial steuern",
+    
+    "ui.error.not_running.title": "PipeWeaver Läuft Nicht",
+    "ui.error.not_running.subtitle": "Bitte starten Sie den PipeWeaver Daemon um diese Aktion zu konfigurieren",
+    
+    "ui.device.title": "Gerät",
+    
+    "ui.mix_selection.title": "Mix Auswahl",
+    "ui.mix_a.title": "Mix A",
+    "ui.mix_b.title": "Mix B",
+    
+    "ui.custom_icon.title": "Benutzerdefiniertes Icon",
+    "ui.custom_icon.subtitle": "Wählen Sie eine benutzerdefinierte Icon-Datei oder verwenden Sie ein Icon aus einer installierten Icon-Bibliothek",
+    "ui.icon_library_name.title": "Icon Bibliotheksname",
+    "ui.custom_icon_file.title": "Benutzerdefinierte Icon-Datei",
+    "ui.custom_icon_file.subtitle": "Wählen Sie eine benutzerdefinierte Bilddatei für das Icon",
+    "ui.custom_icon_file.selected": "Ausgewählt: {filename}",
+    
+    "ui.volume_step.title": "Lautstärkeschritt",
+    "ui.volume_step.subtitle": "Lautstärkeänderung pro Dial-Schritt (1-20%)",
+    
+    "ui.refresh_devices.button": "Geräte Aktualisieren",
+    
+    "ui.mute_targets.title": "Stummschaltungsziele",
+    "ui.mute_to_all.title": "Alle Stummschalten",
+    "ui.na_target.title": "N/A (Zielgerät)",
+    "ui.no_targets_available.title": "Keine Ziele verfügbar",
+    "ui.failed_get_status.title": "Status Abrufen Fehlgeschlagen",
+    "ui.error_loading_targets.title": "Fehler beim Laden der Ziele",
+    
+    "ui.choose_file.button": "Datei Wählen",
+    "ui.change_file.button": "Datei Ändern",
+    "ui.remove_icon.button": "Icon Entfernen"
+}

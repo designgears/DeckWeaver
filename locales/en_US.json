@@ -1,0 +1,50 @@
+{
+    "plugin.name": "DeckWeaver",
+    "plugin.description": "Control PipeWeaver virtual audio devices from your Stream Deck",
+    "plugin.short_description": "Audio control for PipeWeaver",
+    
+    "settings.language.label": "Language",
+    "settings.language.auto": "Auto-detect",
+    
+    "settings.language.name.auto": "Auto-detect",
+    "settings.language.name.en_US": "English (US)",
+    "settings.language.name.es_ES": "Español",
+    "settings.language.name.zh_CN": "简体中文",
+    "settings.language.name.fr_FR": "Français",
+    "settings.language.name.de_DE": "Deutsch",
+    
+    "actions.knob.name": "PipeWeaver Knob",
+    "actions.knob.tooltip": "Control PipeWeaver audio with knob/dial",
+    
+    "ui.error.not_running.title": "PipeWeaver Not Running",
+    "ui.error.not_running.subtitle": "Please start PipeWeaver daemon to configure this action",
+    
+    "ui.device.title": "Device",
+    
+    "ui.mix_selection.title": "Mix Selection",
+    "ui.mix_a.title": "Mix A",
+    "ui.mix_b.title": "Mix B",
+    
+    "ui.custom_icon.title": "Custom Icon",
+    "ui.custom_icon.subtitle": "Select a custom icon file or use an icon from an installed icon library",
+    "ui.icon_library_name.title": "Icon Library Name",
+    "ui.custom_icon_file.title": "Custom Icon File",
+    "ui.custom_icon_file.subtitle": "Select a custom image file for the icon",
+    "ui.custom_icon_file.selected": "Selected: {filename}",
+    
+    "ui.volume_step.title": "Volume Step",
+    "ui.volume_step.subtitle": "Volume change per dial step (1-20%)",
+    
+    "ui.refresh_devices.button": "Refresh Devices",
+    
+    "ui.mute_targets.title": "Mute Targets",
+    "ui.mute_to_all.title": "Mute to All",
+    "ui.na_target.title": "N/A (Target Device)",
+    "ui.no_targets_available.title": "No targets available",
+    "ui.failed_get_status.title": "Failed to get status",
+    "ui.error_loading_targets.title": "Error loading targets",
+    
+    "ui.choose_file.button": "Choose File",
+    "ui.change_file.button": "Change File",
+    "ui.remove_icon.button": "Remove Icon"
+}
