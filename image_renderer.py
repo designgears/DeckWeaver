@@ -3,10 +3,6 @@ import os
 import sys
 import traceback
 
-_vendor_path = os.path.join(os.path.dirname(__file__), 'vendor')
-if os.path.exists(_vendor_path) and _vendor_path not in sys.path:
-    sys.path.insert(0, _vendor_path)
-
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 from loguru import logger as log  # type: ignore
 

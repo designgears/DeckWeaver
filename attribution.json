@@ -13,20 +13,6 @@
         "license-url": "https://opensource.org/licenses/Apache-2.0",
         "description": "WebSocket client for Python"
     },
-    "jsonpatch": {
-        "copyright": "Stefan Kögl",
-        "original-url": "https://github.com/stefankoegl/python-json-patch",
-        "license": "BSD-3-Clause",
-        "license-url": "https://opensource.org/licenses/BSD-3-Clause",
-        "description": "Apply JSON-Patches (RFC 6902)"
-    },
-    "jsonpointer": {
-        "copyright": "Stefan Kögl",
-        "original-url": "https://github.com/stefankoegl/python-json-pointer",
-        "license": "BSD-3-Clause",
-        "license-url": "https://opensource.org/licenses/BSD-3-Clause",
-        "description": "JSON pointer implementation"
-    },
     "numpy": {
         "copyright": "NumPy Developers",
         "original-url": "https://github.com/numpy/numpy",

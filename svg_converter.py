@@ -1,20 +1,9 @@
 """Simple SVG to PIL converter using cairosvg"""
 import os
-import sys
 import io
-
-_vendor_path = os.path.join(os.path.dirname(__file__), 'vendor')
-if os.path.exists(_vendor_path) and _vendor_path not in sys.path:
-    sys.path.insert(0, _vendor_path)
-
-try:
-    import cairosvg
-    from PIL import Image
-    from loguru import logger as log
-    CAIROSVG_AVAILABLE = True
-except ImportError as e:
-    log.error(f"Failed to import SVG converter dependencies: {e}")
-    CAIROSVG_AVAILABLE = False
+import cairosvg
+from PIL import Image
+from loguru import logger as log
 
 
 def svg_to_pil(svg_path: str, size: tuple = (512, 512)) -> 'Image.Image | None':
@@ -28,10 +17,6 @@ def svg_to_pil(svg_path: str, size: tuple = (512, 512)) -> 'Image.Image | None':
     Returns:
         PIL Image or None if failed
     """
-    if not CAIROSVG_AVAILABLE:
-        log.error("cairosvg not available for SVG conversion")
-        return None
-    
     if not os.path.exists(svg_path):
         log.error(f"SVG file not found: {svg_path}")
         return None
@@ -96,13 +81,6 @@ def _crop_and_pad(image: 'Image.Image', padding: int = 2) -> 'Image.Image':
         if log:
             log.error(f"Error cropping and padding image: {e}")
         return image
-
-
-def can_convert_svg() -> bool:
-    """Check if SVG conversion is available"""
-    return CAIROSVG_AVAILABLE
-
-
 def is_svg_file(file_path: str) -> bool:
     """Check if file is an SVG"""
     return file_path.lower().endswith('.svg')

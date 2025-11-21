@@ -3,41 +3,113 @@ import json
 import threading
 import traceback
 import time
-import os
-import sys
 from queue import Queue, Empty
 from loguru import logger as log  # type: ignore
+import websocket  # type: ignore
 
-_vendor_path = os.path.join(os.path.dirname(__file__), 'vendor')
-if os.path.exists(_vendor_path) and _vendor_path not in sys.path:
-    sys.path.insert(0, _vendor_path)
+def _decode_json_pointer_token(token):
+    """Decode a single JSON Pointer token (~0, ~1 sequences)."""
+    return token.replace("~1", "/").replace("~0", "~")
 
-try:
-    import websocket  # type: ignore
-except ImportError:
-    log.error("websocket-client library not found. It should be bundled in the vendor/ directory.")
-    websocket = None
 
-try:
-    import jsonpatch  # type: ignore
-except ImportError:
-    log.error("jsonpatch library not found. It should be bundled in the vendor/ directory.")
-    jsonpatch = None
+def _resolve_json_pointer_parent(doc, path):
+    """Resolve JSON Pointer path to parent container and final key/index.
+
+    Supports a subset of RFC 6901 sufficient for PipeWeaver status patches.
+    """
+    if not path.startswith("/"):
+        raise ValueError(f"Invalid JSON Pointer path: {path}")
+
+    parts = [_decode_json_pointer_token(p) for p in path.lstrip("/").split("/") if p != ""]
+    if not parts:
+        raise ValueError("Empty JSON Pointer path")
+
+    target = doc
+    for part in parts[:-1]:
+        if isinstance(target, list):
+            try:
+                index = int(part)
+            except ValueError:
+                raise ValueError(f"Expected list index in JSON Pointer path, got '{part}'")
+            if index < 0 or index >= len(target):
+                raise IndexError(f"List index out of range in JSON Pointer path: {index}")
+            target = target[index]
+        else:
+            if part not in target or not isinstance(target[part], (dict, list)):
+                target[part] = {}
+            target = target[part]
+
+    return target, parts[-1]
+
+
+def _apply_single_patch_op(doc, op):
+    """Apply a single JSON Patch operation (add, remove, replace)."""
+    operation = op.get("op")
+    path = op.get("path")
+
+    if path is None:
+        raise ValueError(f"Patch operation missing path: {op}")
+
+    parent, key = _resolve_json_pointer_parent(doc, path)
+
+    if operation in ("add", "replace"):
+        value = op.get("value")
+        if isinstance(parent, list):
+            if key == "-":
+                parent.append(value)
+            else:
+                index = int(key)
+                if operation == "add" and index == len(parent):
+                    parent.append(value)
+                else:
+                    parent[index] = value
+        else:
+            parent[key] = value
+    elif operation == "remove":
+        if isinstance(parent, list):
+            index = int(key)
+            del parent[index]
+        else:
+            if key in parent:
+                del parent[key]
+    else:
+        log.warning(f"Unsupported JSON Patch operation: {operation}")
+
+
+def apply_status_patch(status, patch):
+    """Apply a JSON Patch list to the status dict in-place.
+
+    This is a lightweight replacement for the external jsonpatch library and
+    supports the operations used by PipeWeaver (add, remove, replace).
+    """
+    if not isinstance(patch, list):
+        log.warning(f"Invalid patch format (expected list): {type(patch)}")
+        return
+
+    for op in patch:
+        try:
+            if not isinstance(op, dict):
+                log.warning(f"Ignoring non-dict patch operation: {op}")
+                continue
+            _apply_single_patch_op(status, op)
+        except Exception as e:
+            log.error(f"Error applying patch operation {op}: {e}")
+            log.error(traceback.format_exc())
 
 
 class MeterWebSocketClient:
     """WebSocket client for receiving meter data"""
-    
+
     def __init__(self, callback, port=14565):
         if websocket is None:
             raise ImportError("websocket-client library is required. Install it with: pip install websocket-client")
-        
+
         self.callback = callback
         self.port = port
         self.ws = None
         self.running = False
         self.thread = None
-    
+
     def _run(self):
         """Run WebSocket client in thread using websocket-client library"""
         while self.running:
@@ -45,7 +117,7 @@ class MeterWebSocketClient:
                 url = f"ws://localhost:{self.port}/api/websocket/meter"
 
                 self.ws = websocket.create_connection(url, timeout=5)
-                
+
                 while self.running:
                     try:
                         self.ws.sock.settimeout(1.0)
@@ -70,7 +142,7 @@ class MeterWebSocketClient:
                         log.error(f"Error receiving meter message: {e}")
                         log.error(traceback.format_exc())
                         break
-                        
+
             except Exception as e:
                 if self.running:
                     log.error(f"Meter WebSocket connection error: {e}")
@@ -78,7 +150,7 @@ class MeterWebSocketClient:
                 self.ws = None
                 if self.running:
                     time.sleep(5)
-    
+
     def start(self):
         """Start WebSocket client"""
         if self.running:
@@ -87,7 +159,7 @@ class MeterWebSocketClient:
         self.running = True
         self.thread = threading.Thread(target=self._run, daemon=True, name="MeterWebSocket")
         self.thread.start()
-    
+
     def stop(self):
         """Stop WebSocket client"""
         self.running = False
@@ -102,11 +174,8 @@ class MeterWebSocketClient:
 
 class PipeWeaverWebSocketClient:
     """Full-featured WebSocket client for PipeWeaver with command support and patch handling"""
-    
-    def __init__(self, port=14565, patch_callback=None):
-        if jsonpatch is None:
-            raise ImportError("jsonpatch library is required. Install it with: pip install jsonpatch")
 
+    def __init__(self, port=14565, patch_callback=None):
         self.port = port
         self.patch_callback = patch_callback
         self.ws = None
@@ -232,7 +301,7 @@ class PipeWeaverWebSocketClient:
 
         try:
             with self.lock:
-                jsonpatch.apply_patch(self.status, patch, in_place=True)
+                apply_status_patch(self.status, patch)
 
             if self.patch_callback:
                 self.patch_callback(self.status)

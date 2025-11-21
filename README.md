@@ -69,7 +69,7 @@ PipeWeaver is a virtual audio routing system that allows you to create and manag
 
 ### Connection
 - WebSocket client connects to PipeWeaver
-- Real-time status updates via JSON patch protocol
+- Real-time status updates via JSON patch stream
 - Automatic reconnection on connection loss
 
 ### Device Types
@@ -80,13 +80,6 @@ PipeWeaver is a virtual audio routing system that allows you to create and manag
 - Real-time audio level monitoring
 - Visual feedback on Stream Deck display
 - Separate metering for Mix A, Mix B, and target devices
-
-## Dependencies
-
-- `websocket-client` - WebSocket communication with PipeWeaver
-- `jsonpatch` - Real-time status updates
-- `Pillow` - Image processing for custom icons
-- `cairosvg` - SVG to PNG conversion for icons
 
 ## License
 
