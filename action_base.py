@@ -1,6 +1,4 @@
 from src.backend.PluginManager.ActionBase import ActionBase  # type: ignore
-from src.backend.DeckManagement.InputIdentifier import Input  # type: ignore
-import sys
 import os
 import traceback
 import time
@@ -17,7 +15,7 @@ import globals as gl
 
 from .websocket_client import PipeWeaverWebSocketClient, MeterWebSocketClient
 from .image_renderer import ImageRenderer
-from .svg_converter import svg_to_pil, can_convert_svg, is_svg_file
+from .svg_converter import svg_to_pil, is_svg_file
 
 class PipeWeaverAction(ActionBase):
     def __init__(self, *args, **kwargs):
