@@ -221,7 +221,7 @@ class ImageRenderer:
                 if os.path.exists(icon_path):
                     link_icon = Image.open(icon_path)
                     if link_icon.mode == 'P':
-                        link_icon = link_icon.convert('RGB')
+                        link_icon = link_icon.convert('RGBA')
                     link_icon_resized = link_icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
                     if link_icon_resized.mode != 'RGBA':
                         link_icon_resized = link_icon_resized.convert('RGBA')
