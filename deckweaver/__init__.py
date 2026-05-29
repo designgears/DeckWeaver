@@ -4,7 +4,9 @@ try:
     from . import _core
 except ImportError as exc:
     raise ImportError(
-        "deckweaver._core is not built. Build with `./build.sh release` or `pip install .`."
+        f"deckweaver._core is not built. "
+        f"Build with `./build.sh release` or `pip install .`. "
+        f"Original error: {exc}"
     ) from exc
 
 # Re-export public API
