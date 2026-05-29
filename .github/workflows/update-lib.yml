@@ -1,0 +1,51 @@
+name: Build Core Library
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    # Only run on a chore(release) commit, and make sure we don't loop ourselves around
+    if: |
+      startsWith(github.event.head_commit.message, 'chore(release)') &&
+      github.actor != 'github-actions[bot]'
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      ## Pull in Python
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      ## Pull in Rust
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      ## Run the build script
+      - name: Run update script
+        run: |
+          bash ./build.sh release
+
+      ## Push the file to the repo
+      - name: Commit updated files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add deckweaver/_core.abi3.so
+
+          # Skip commit if nothing changed
+          git diff --cached --quiet && exit 0
+
+          git commit -m "${{ github.event.head_commit.message }}"
+          git push
