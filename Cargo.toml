@@ -1,6 +1,6 @@
 [package]
 name = "deckweaver"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 authors = ["DesignGears"]
 description = "Stream Deck plugin for PipeWeaver audio control"
