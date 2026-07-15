@@ -1011,7 +1011,7 @@ class ButtonAction(BaseAction):
             group.add(row)
         container.append(group)
 
-    def _populate_device_list(
+    def _fill_device_container(
         self,
         container: Gtk.Box,
         devices: list,
@@ -1175,7 +1175,7 @@ class SourceSwitchButtonAction(ButtonAction):
         return config
 
     def _populate_output_device_list(self):
-        self._populate_device_list(
+        self._fill_device_container(
             self.output_device_container,
             self._core.get_physical_targets(),
             self._on_output_row_activated,
@@ -1377,7 +1377,7 @@ class PhysicalSourceSwitchButtonAction(ButtonAction):
         return config
 
     def _populate_output_device_list(self):
-        self._populate_device_list(
+        self._fill_device_container(
             self.output_device_container,
             self._core.get_physical_sources(),
             self._on_output_row_activated,
