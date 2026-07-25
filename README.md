@@ -1,3 +1,5 @@
+<img width="629" height="102" alt="image" src="https://github.com/user-attachments/assets/2dfc5dd2-052e-4d4c-a382-b2e653eee3e3" />
+
 # DeckWeaver
 
 A Stream Deck plugin for controlling PipeWeaver virtual audio devices. Works with **StreamController** and **OpenDeck**, sharing one Rust core for PipeWeaver IPC and rendering.
