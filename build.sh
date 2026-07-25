@@ -86,11 +86,17 @@ if [ "$BUILD_SC" = true ]; then
 fi
 
 if [ "$BUILD_OD" = true ]; then
+  echo "Building OpenDeck plugin binary for $HOST_TRIPLE..."
+  cargo build -p deckweaver-opendeck "${CARGO_FLAGS[@]}"
+
+  # Must follow the build: the generator reads the fontawesome-free-pack sources out of the
+  # cargo registry, and cargo only extracts them once something actually needs the crate. The
+  # manifest is a property-inspector asset fetched at runtime, never a build input, so
+  # generating it here is fine. Ordered the other way it works on a machine that happens to
+  # have the crate cached and fails on a clean CI runner.
   echo "Generating Font Awesome icon manifest..."
   python3 "$SCRIPT_DIR/scripts/generate-fa-icons-json.py"
 
-  echo "Building OpenDeck plugin binary for $HOST_TRIPLE..."
-  cargo build -p deckweaver-opendeck "${CARGO_FLAGS[@]}"
   mkdir -p "$OD_BIN_DIR"
   OD_BIN=""
   for candidate in "target/$TARGET_SUBDIR/deckweaver-opendeck" target/$TARGET_SUBDIR/deps/deckweaver-*; do
