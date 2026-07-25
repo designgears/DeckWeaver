@@ -1,0 +1,273 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use deckweaver_core::{
+    action_dimensions, populate_common_fields, ActionConfig, ActionType, ControllerKind,
+    DeckWeaverCore, DeviceType as CoreDeviceType,
+};
+use image::codecs::png::PngEncoder;
+use image::{ColorType, ImageEncoder, RgbaImage};
+use once_cell::sync::OnceCell;
+use openaction::{get_instance, Instance};
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+
+/// Knob actions render the full dial UI in the image; title overlay would clash with it.
+const KNOB_ACTION_UUID: &str = "com.designgears.deckweaver.knob";
+
+static CORE: OnceCell<Arc<Mutex<DeckWeaverCore>>> = OnceCell::new();
+
+pub fn core() -> Arc<Mutex<DeckWeaverCore>> {
+    CORE.get_or_init(|| {
+        let mut engine = DeckWeaverCore::new();
+        engine.start();
+        let shared = Arc::new(Mutex::new(engine));
+        spawn_update_loop(shared.clone());
+        shared
+    })
+    .clone()
+}
+
+fn controller_kind(instance: &Instance) -> ControllerKind {
+    if instance.controller.eq_ignore_ascii_case("Encoder") {
+        ControllerKind::Encoder
+    } else {
+        ControllerKind::Keypad
+    }
+}
+
+/// Dimensions used by the shared renderer and sent to OpenDeck via setImage.
+pub fn dimensions_for_instance(instance: &Instance, action_type: ActionType) -> (u32, u32) {
+    action_dimensions(action_type, controller_kind(instance))
+}
+
+fn spawn_update_loop(core: Arc<Mutex<DeckWeaverCore>>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(33)).await;
+            let updates = core.lock().get_pending_updates();
+            for (action_id, update) in updates {
+                let Some(instance) = get_instance(action_id.clone()).await else {
+                    continue;
+                };
+
+                if let (Some(bytes), Some(width), Some(height)) =
+                    (update.image, update.width, update.height)
+                {
+                    if let Some(data_uri) = rgba_to_data_uri(&bytes, width, height) {
+                        let _ = instance.set_image(Some(data_uri), None).await;
+                    }
+                }
+
+                // StreamController shows the device name below the dial (set_top_label).
+                // OpenDeck draws set_title on top of the LCD image, which breaks knob layout.
+                if instance.action_uuid != KNOB_ACTION_UUID {
+                    if let Some(label) = update.label {
+                        if controller_kind(&instance) == ControllerKind::Encoder {
+                            let _ = instance
+                                .set_title(Some(label.chars().take(25).collect::<String>()), None)
+                                .await;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn rgba_to_data_uri(rgba: &[u8], width: u32, height: u32) -> Option<String> {
+    let image = RgbaImage::from_raw(width, height, rgba.to_vec())?;
+    let mut png = Vec::new();
+    PngEncoder::new(&mut png)
+        .write_image(image.as_raw(), width, height, ColorType::Rgba8.into())
+        .ok()?;
+    Some(format!("data:image/png;base64,{}", STANDARD.encode(png)))
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct ActionSettings {
+    pub device_id: Option<String>,
+    pub device_type: Option<String>,
+    pub volume_step: i8,
+    pub meters_enabled: bool,
+    pub meter_invert_color: bool,
+    pub meter_color: Option<Vec<u8>>,
+    pub volume_bar_color: Option<Vec<u8>>,
+    pub icon_fa: Option<String>,
+    pub icon_path: Option<String>,
+    pub source_mix: Option<String>,
+    pub mute_profile_index: u8,
+    pub mute_profile_data: Option<String>,
+    pub orientation: Option<String>,
+    pub hardware_device_node_id: Option<u32>,
+    pub hardware_device_description: Option<String>,
+    /// Knob only. `None` means on: an action whose property inspector has never been opened
+    /// should match the renderer's own default rather than silently hiding the readout. Kept as
+    /// an `Option` so the derived `Default` — used as a fallback on the touch-tap path — agrees
+    /// with what serde produces for absent settings.
+    pub show_volume: Option<bool>,
+}
+
+impl ActionSettings {
+    pub fn normalized_volume_step(&self, signed: bool, default: i8, min: i8, max: i8) -> i8 {
+        let mut value = if self.volume_step == 0 {
+            default
+        } else {
+            self.volume_step
+        };
+        if !signed {
+            value = value.abs();
+        }
+        value.clamp(min, max)
+    }
+
+    fn parse_device_type(&self) -> Option<CoreDeviceType> {
+        match self.device_type.as_deref() {
+            Some("source") => Some(CoreDeviceType::Source),
+            Some("target") => Some(CoreDeviceType::Target),
+            _ => None,
+        }
+    }
+
+    fn color_tuple(value: &Option<Vec<u8>>) -> Option<(u8, u8, u8, u8)> {
+        let color = value.as_ref()?;
+        match color.len() {
+            3 => Some((color[0], color[1], color[2], 255)),
+            n if n >= 4 => Some((color[0], color[1], color[2], color[3])),
+            _ => None,
+        }
+    }
+
+    pub fn mute_profile_data(&self) -> Vec<bool> {
+        let Some(raw) = self.mute_profile_data.as_ref() else {
+            return vec![false, false];
+        };
+        serde_json::from_str::<Vec<bool>>(raw).unwrap_or_else(|_| vec![false, false])
+    }
+}
+
+fn build_config(
+    action_id: String,
+    action_type: ActionType,
+    settings: &ActionSettings,
+    width: u32,
+    height: u32,
+) -> ActionConfig {
+    let mut config = ActionConfig::new(action_id, action_type, width, height);
+    let icon_path = if settings
+        .icon_fa
+        .as_ref()
+        .is_some_and(|slug| !slug.is_empty())
+    {
+        None
+    } else {
+        settings.icon_path.clone()
+    };
+    populate_common_fields(
+        &mut config,
+        settings.device_id.clone(),
+        settings.parse_device_type(),
+        settings.volume_step,
+        settings.meters_enabled,
+        settings.meter_invert_color,
+        ActionSettings::color_tuple(&settings.volume_bar_color),
+        ActionSettings::color_tuple(&settings.meter_color),
+        icon_path,
+        settings.orientation.clone(),
+    );
+
+    if let Some(slug) = settings.icon_fa.as_ref().filter(|slug| !slug.is_empty()) {
+        config.icon_png = crate::fa_icons::fa_icon_to_png(slug);
+    }
+
+    if action_type == ActionType::Knob {
+        config.apply_knob_settings(
+            settings.source_mix.as_deref() == Some("B"),
+            settings.mute_profile_index,
+            settings.mute_profile_data(),
+            settings.show_volume.unwrap_or(true),
+        );
+    }
+
+    config
+}
+
+pub fn build_config_for_instance(
+    instance: &Instance,
+    action_type: ActionType,
+    settings: &ActionSettings,
+) -> ActionConfig {
+    let (width, height) = dimensions_for_instance(instance, action_type);
+    build_config(
+        instance.instance_id.to_string(),
+        action_type,
+        settings,
+        width,
+        height,
+    )
+}
+
+pub fn register_instance(
+    instance: &Instance,
+    action_type: ActionType,
+    settings: &ActionSettings,
+    width: u32,
+    height: u32,
+) {
+    let action_id = instance.instance_id.to_string();
+    let mut config = build_config(action_id.clone(), action_type, settings, width, height);
+
+    if config.device_type.is_none() {
+        if let Some(device_id) = config.device_id.as_deref() {
+            let core_arc = core();
+            config.device_type = core_arc
+                .lock()
+                .infer_device_type(device_id, action_type == ActionType::Button);
+        }
+    }
+
+    core().lock().register_action(config);
+}
+
+pub fn update_instance(instance: &Instance, action_type: ActionType, settings: &ActionSettings) {
+    let (width, height) = dimensions_for_instance(instance, action_type);
+    let action_id = instance.instance_id.to_string();
+    let config = build_config(action_id, action_type, settings, width, height);
+    core().lock().update_action(&instance.instance_id.to_string(), config);
+}
+
+pub async fn send_devices(instance: &Instance) -> openaction::OpenActionResult<()> {
+    let payload = {
+        let core_arc = core();
+        let core = core_arc.lock();
+        serde_json::json!({
+            "event": "devices",
+            "available": core.is_available(),
+            "sources": core.get_sources(),
+            "targets": core.get_targets(),
+            "outputHardware": core.get_output_hardware_devices(),
+            "inputHardware": core.get_input_hardware_devices(),
+        })
+    };
+    instance.send_to_property_inspector(payload).await
+}
+
+pub fn unregister_instance(instance: &Instance) {
+    core()
+        .lock()
+        .unregister_action(&instance.instance_id.to_string());
+}
+
+pub async fn handle_pi_message(
+    instance: &Instance,
+    _action_type: ActionType,
+    _settings: &ActionSettings,
+    payload: &serde_json::Value,
+) -> openaction::OpenActionResult<()> {
+    match payload.get("event").and_then(|v| v.as_str()) {
+        Some("refreshDevices") => send_devices(instance).await,
+        _ => Ok(()),
+    }
+}

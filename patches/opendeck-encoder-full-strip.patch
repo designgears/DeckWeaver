@@ -1,0 +1,157 @@
+diff --git a/src-tauri/src/elgato.rs b/src-tauri/src/elgato.rs
+index 1d755a9..16b9fdd 100644
+--- a/src-tauri/src/elgato.rs
++++ b/src-tauri/src/elgato.rs
+@@ -16,6 +16,35 @@ use tokio::sync::RwLock;
+ static ELGATO_DEVICES: LazyLock<RwLock<HashMap<String, AsyncStreamDeck>>> = LazyLock::new(|| RwLock::new(HashMap::new()));
+ static HIDAPI: LazyLock<RwLock<Option<Arc<hidapi::HidApi>>>> = LazyLock::new(|| RwLock::new(None));
+ 
++const ENCODER_ZONE_WIDTH: u32 = 200;
++const ENCODER_ZONE_HEIGHT: u32 = 100;
++const ENCODER_ICON_SIZE: u32 = 72;
++
++async fn write_encoder_image(device: &AsyncStreamDeck, position: u8, bytes: &[u8]) -> Result<(), anyhow::Error> {
++	let img = image::load_from_memory(bytes)?;
++	let zone_x = position as u16 * ENCODER_ZONE_WIDTH as u16;
++
++	if img.width() == ENCODER_ZONE_WIDTH && img.height() == ENCODER_ZONE_HEIGHT {
++		device
++			.write_lcd(zone_x, 0, &ImageRect::from_image_async(img)?)
++			.await?;
++	} else {
++		device
++			.write_lcd(
++				zone_x + 64,
++				14,
++				&ImageRect::from_image_async(img.resize(
++					ENCODER_ICON_SIZE,
++					ENCODER_ICON_SIZE,
++					image::imageops::FilterType::Nearest,
++				))?,
++			)
++			.await?;
++	}
++
++	Ok(())
++}
++
+ /// Extract the average colour from an image.
+ fn extract_average_colour(img: &image::DynamicImage) -> (u8, u8, u8) {
+ 	let (r_sum, g_sum, b_sum) = img
+@@ -38,13 +67,7 @@ pub async fn update_image(context: &crate::shared::Context, image: Option<&str>)
+ 			let data = image.split_once(',').unwrap().1;
+ 			let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+ 			if context.controller == "Encoder" {
+-				device
+-					.write_lcd(
+-						(context.position as u16 * 200) + 64,
+-						14,
+-						&ImageRect::from_image_async(image::load_from_memory(&bytes)?.resize(72, 72, image::imageops::FilterType::Nearest))?,
+-					)
+-					.await?;
++				write_encoder_image(device, context.position, &bytes).await?;
+ 			} else if is_touch_point {
+ 				let (r, g, b) = extract_average_colour(&image::load_from_memory(&bytes)?);
+ 				device.set_touchpoint_color(context.position - key_count, r, g, b).await?;
+@@ -53,7 +76,14 @@ pub async fn update_image(context: &crate::shared::Context, image: Option<&str>)
+ 			}
+ 		} else if context.controller == "Encoder" {
+ 			device
+-				.write_lcd(context.position as u16 * 200, 0, &ImageRect::from_image_async(image::DynamicImage::new_rgb8(200, 100))?)
++				.write_lcd(
++					context.position as u16 * ENCODER_ZONE_WIDTH as u16,
++					0,
++					&ImageRect::from_image_async(image::DynamicImage::new_rgb8(
++						ENCODER_ZONE_WIDTH,
++						ENCODER_ZONE_HEIGHT,
++					))?,
++				)
+ 				.await?;
+ 		} else if is_touch_point {
+ 			device.set_touchpoint_color(context.position - key_count, 0, 0, 0).await?;
+diff --git a/src/components/DeviceView.svelte b/src/components/DeviceView.svelte
+index e97db8a..9e9536e 100644
+--- a/src/components/DeviceView.svelte
++++ b/src/components/DeviceView.svelte
+@@ -209,7 +209,7 @@
+ 			{/each}
+ 		</div>
+ 
+-		<div class="flex flex-row" role="row">
++		<div class="flex flex-row mt-2" role="row">
+ 			{#each { length: device.encoders } as _, i}
+ 				<Key
+ 					context={{ device: device.id, profile: profile.id, controller: "Encoder", position: i }}
+@@ -218,7 +218,8 @@
+ 					on:drop={(event) => handleDrop(event, "Encoder", i)}
+ 					on:dragstart={(event) => handleDragStart(event, "Encoder", i)}
+ 					{handlePaste}
+-					size={device.id.startsWith("sd-") && device.rows == 4 && device.columns == 8 ? 192 : 144}
++					size={200}
++					canvasHeight={100}
+ 					label="Encoder {i + 1}"
+ 					tabindex={focusedRow === encoderRowIndex && focusedCol === i ? 0 : -1}
+ 				/>
+diff --git a/src/components/Key.svelte b/src/components/Key.svelte
+index 6629c34..aff0214 100644
+--- a/src/components/Key.svelte
++++ b/src/components/Key.svelte
+@@ -146,6 +146,8 @@
+ 	let canvas: HTMLCanvasElement;
+ 	let lock = new CanvasLock();
+ 	export let size = 144;
++	export let canvasHeight: number | undefined = undefined;
++	$: height = canvasHeight ?? size;
+ 	$: (async () => {
+ 		const sl = structuredClone(slot);
+ 		if (!sl) {
+@@ -183,6 +185,10 @@
+ 		await invoke("trigger_virtual_press", { context });
+ 	}
+ 
+ 	$: accessibleLabel = label + (slot ? ": " + slot.action.name + (state?.show && state?.text ? " - " + state.text : "") : "");
++	$: outerWidth = 132;
++	$: outerHeight = canvasHeight ? height * (outerWidth / size) : outerWidth;
++	$: marginX = -((size + 3 * 2 /* border */ - outerWidth) / 2);
++	$: marginY = -((height + 3 * 2 /* border */ - outerHeight) / 2);
+ </script>
+ 
+ <div
+@@ -193,12 +199,13 @@
+ 	<canvas
+ 		bind:this={canvas}
+ 		class="relative border-3 border-neutral-700 rounded-3xl outline-none outline-offset-2 outline-blue-500"
+-		style={`margin: ${-((size + 3 * 2 /* border */ - 132 /* desired outer size */) / 2)}px;`}
++		style={`margin: ${marginY}px ${marginX}px;`}
+ 		class:outline-solid={active && ((slot && $inspectedInstance == slot.context) || (context && $inspectedInstance == context))}
+-		class:rounded-full!={context?.controller == "Encoder"}
++		class:rounded-full!={context?.controller == "Encoder" && !canvasHeight}
++		class:rounded-2xl!={context?.controller == "Encoder" && canvasHeight}
+ 		class:bg-black={slot != null}
+ 		width={size}
+-		height={size}
++		height={height}
+ 		draggable={slot != null}
+ 		{tabindex}
+ 		{role}
+diff --git a/src/lib/rendererHelper.ts b/src/lib/rendererHelper.ts
+index 9689b3e..2cd9a48 100644
+--- a/src/lib/rendererHelper.ts
++++ b/src/lib/rendererHelper.ts
+@@ -53,13 +53,15 @@ export async function renderImage(
+ 	preview?: boolean,
+ ) {
+ 	// Create canvas
++	let referenceWidth = 144;
+ 	let scale = 1;
+ 	if (!canvas) {
+ 		canvas = document.createElement("canvas");
+ 		canvas.width = 144;
+ 		canvas.height = 144;
+ 	} else {
+-		scale = canvas.width / 144;
++		referenceWidth = canvas.width === 200 && canvas.height === 100 ? 200 : 144;
++		scale = canvas.width / referenceWidth;
+ 	}
+ 
+ 	const context = canvas.getContext("2d");

@@ -1,5 +1,4 @@
 use super::common::*;
-use pyo3::prelude::*;
 use tiny_skia::Pixmap;
 
 const CORNER_INSET: f32 = 16.0;
@@ -7,96 +6,13 @@ const BAR_WIDTH: f32 = 25.0;
 const BAR_OFFSET_Y: f32 = 0.0;
 const STROKE_WIDTH: f32 = 2.0;
 
-#[pyclass]
 pub struct SliderRenderer {
     button_size: u32,
 }
 
-#[pymethods]
 impl SliderRenderer {
-    #[new]
-    #[pyo3(signature = (button_size=72))]
     pub fn new(button_size: u32) -> Self {
         Self { button_size }
-    }
-
-    #[pyo3(signature = (
-        volume,
-        is_top=true,
-        is_source=true,
-        is_horizontal=false,
-        meter_value=0,
-        device_color=None,
-        volume_bar_color=None,
-        meter_color=None,
-        meter_invert=true,
-        meters_enabled=true
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn render(
-        &self,
-        volume: u8,
-        is_top: bool,
-        is_source: bool,
-        is_horizontal: bool,
-        meter_value: u8,
-        device_color: Option<(u8, u8, u8)>,
-        volume_bar_color: Option<(u8, u8, u8, u8)>,
-        meter_color: Option<(u8, u8, u8, u8)>,
-        meter_invert: bool,
-        meters_enabled: bool,
-    ) -> PyResult<(Vec<u8>, u32, u32)> {
-        let params = RenderParams {
-            volume,
-            is_muted: false,
-            is_source,
-            meter_value,
-            device_color,
-            volume_bar_color,
-            meter_color,
-            meter_invert,
-            meters_enabled,
-            mix_b_active: false,
-            source_volumes_linked: false,
-            mute_profile: 0,
-            mute_profile_muted: false,
-        };
-        self.encode_pixmap(self.render_internal(&params, is_top, is_horizontal))
-    }
-
-    pub fn render_unavailable(&self) -> PyResult<(Vec<u8>, u32, u32)> {
-        self.encode_pixmap(create_unavailable_pixmap(
-            self.button_size,
-            self.button_size,
-        ))
-    }
-
-    pub fn render_loading(&self) -> PyResult<(Vec<u8>, u32, u32)> {
-        let params = RenderParams {
-            volume: 0,
-            is_muted: false,
-            is_source: false,
-            meter_value: 0,
-            device_color: None,
-            volume_bar_color: None,
-            meter_color: None,
-            meter_invert: true,
-            meters_enabled: false,
-            mix_b_active: false,
-            source_volumes_linked: false,
-            mute_profile: 0,
-            mute_profile_muted: false,
-        };
-        self.encode_pixmap(self.render_internal(&params, true, false))
-    }
-}
-
-impl SliderRenderer {
-    fn encode_pixmap(&self, pixmap: Option<Pixmap>) -> PyResult<(Vec<u8>, u32, u32)> {
-        let pixmap =
-            pixmap.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to render"))?;
-        pixmap_to_rgba(&pixmap)
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Failed to encode RGBA"))
     }
 
     pub fn render_internal_png(
@@ -117,6 +33,7 @@ impl SliderRenderer {
 
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
         let params = RenderParams {
+            name: String::new(),
             volume: 0,
             is_muted: false,
             is_source: false,
@@ -130,6 +47,7 @@ impl SliderRenderer {
             source_volumes_linked: false,
             mute_profile: 0,
             mute_profile_muted: false,
+            show_volume: false,
         };
         pixmap_to_rgba(&self.render_internal(&params, true, false)?)
     }

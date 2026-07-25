@@ -1,16 +1,10 @@
 use image::{imageops::FilterType, ImageEncoder};
-use pyo3::prelude::*;
 use resvg::{tiny_skia, usvg};
 use std::fs;
 use std::path::Path;
 
 const DEFAULT_ICON_SIZE: u32 = 200;
 const MIN_ICON_SIZE: u32 = 200;
-
-#[pyfunction]
-pub fn load_icon_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
-    Ok(load_icon_to_png_bytes(path))
-}
 
 pub fn load_icon_to_png_bytes(path: &str) -> Option<Vec<u8>> {
     let path_obj = Path::new(path);
@@ -31,20 +25,12 @@ pub fn load_icon_to_png_bytes(path: &str) -> Option<Vec<u8>> {
     load_image_to_png(path)
 }
 
-fn load_svg_to_png(path: &str) -> Option<Vec<u8>> {
-    let svg_data = match fs::read(path) {
-        Ok(data) => data,
-        Err(e) => {
-            tracing::warn!("Failed to read SVG file {}: {}", path, e);
-            return None;
-        }
-    };
-
+pub fn svg_data_to_png_bytes(svg_data: &[u8]) -> Option<Vec<u8>> {
     let opt = usvg::Options::default();
-    let tree = match usvg::Tree::from_data(&svg_data, &opt) {
+    let tree = match usvg::Tree::from_data(svg_data, &opt) {
         Ok(tree) => tree,
         Err(e) => {
-            tracing::warn!("Failed to parse SVG {}: {}", path, e);
+            tracing::warn!("Failed to parse SVG data: {}", e);
             return None;
         }
     };
@@ -66,7 +52,7 @@ fn load_svg_to_png(path: &str) -> Option<Vec<u8>> {
     let mut pixmap = match tiny_skia::Pixmap::new(target_width, target_height) {
         Some(pixmap) => pixmap,
         None => {
-            tracing::warn!("Failed to create pixmap for SVG {}", path);
+            tracing::warn!("Failed to create pixmap for SVG");
             return None;
         }
     };
@@ -77,10 +63,21 @@ fn load_svg_to_png(path: &str) -> Option<Vec<u8>> {
     match pixmap.encode_png() {
         Ok(png_data) => Some(png_data),
         Err(e) => {
-            tracing::warn!("Failed to encode SVG as PNG {}: {}", path, e);
+            tracing::warn!("Failed to encode SVG as PNG: {}", e);
             None
         }
     }
+}
+
+fn load_svg_to_png(path: &str) -> Option<Vec<u8>> {
+    let svg_data = match fs::read(path) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::warn!("Failed to read SVG file {}: {}", path, e);
+            return None;
+        }
+    };
+    svg_data_to_png_bytes(&svg_data)
 }
 
 fn load_image_to_png(path: &str) -> Option<Vec<u8>> {

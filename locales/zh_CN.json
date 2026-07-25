@@ -42,6 +42,8 @@
     
     "ui.volume_step.title": "音量步长",
     "ui.volume_step.subtitle": "每次拨盘步长的音量变化（5-20%）",
+    "ui.show_volume.title": "音量百分比",
+    "ui.show_volume.subtitle": "在旋钮屏幕上显示音量百分比",
     
     "ui.refresh_devices.button": "刷新设备",
     

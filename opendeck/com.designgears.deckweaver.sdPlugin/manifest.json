@@ -1,0 +1,68 @@
+{
+  "Name": "DeckWeaver",
+  "Description": "Control PipeWeaver virtual audio devices from your Stream Deck",
+  "Author": "DesignGears",
+  "Version": "0.6.1",
+  "CodePaths": {
+    "x86_64-unknown-linux-gnu": "x86_64-unknown-linux-gnu/bin/deckweaver",
+    "aarch64-unknown-linux-gnu": "aarch64-unknown-linux-gnu/bin/deckweaver"
+  },
+  "CodePathLin": "x86_64-unknown-linux-gnu/bin/deckweaver",
+  "Icon": "icons/plugin",
+  "Category": "PipeWeaver",
+  "OS": [
+    { "Platform": "linux" }
+  ],
+  "Actions": [
+    {
+      "Icon": "icons/knob",
+      "Name": "PipeWeaver Knob",
+      "States": [{ "Image": "actionDefaultImage", "ShowTitle": false }],
+      "Controllers": ["Encoder"],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Control PipeWeaver volume with a dial",
+      "UUID": "com.designgears.deckweaver.knob",
+      "PropertyInspectorPath": "propertyInspector/action.html"
+    },
+    {
+      "Icon": "icons/button",
+      "Name": "PipeWeaver Volume",
+      "States": [{ "Image": "actionDefaultImage" }],
+      "Controllers": ["Keypad", "Encoder"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Volume up, down, or mute on press",
+      "UUID": "com.designgears.deckweaver.button",
+      "PropertyInspectorPath": "propertyInspector/action.html"
+    },
+    {
+      "Icon": "icons/button",
+      "Name": "PipeWeaver Output Switch",
+      "States": [{ "Image": "actionDefaultImage" }],
+      "Controllers": ["Keypad", "Encoder"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Switch hardware output routing",
+      "UUID": "com.designgears.deckweaver.sourceswitch",
+      "PropertyInspectorPath": "propertyInspector/sourceSwitch.html"
+    },
+    {
+      "Icon": "icons/button",
+      "Name": "PipeWeaver Input Switch",
+      "States": [{ "Image": "actionDefaultImage" }],
+      "Controllers": ["Keypad", "Encoder"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Switch hardware input routing",
+      "UUID": "com.designgears.deckweaver.physicalsourceswitch",
+      "PropertyInspectorPath": "propertyInspector/physicalSourceSwitch.html"
+    },
+    {
+      "Icon": "icons/slider",
+      "Name": "PipeWeaver Slider",
+      "States": [{ "Image": "actionDefaultImage" }],
+      "Controllers": ["Keypad", "Encoder"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Control a virtual slider half",
+      "UUID": "com.designgears.deckweaver.slider",
+      "PropertyInspectorPath": "propertyInspector/slider.html"
+    }
+  ]
+}

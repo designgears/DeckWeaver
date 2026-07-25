@@ -1,6 +1,6 @@
 # DeckWeaver
 
-A Stream Deck plugin for controlling PipeWeaver virtual audio devices. Provides hardware control for volume and mute through your Stream Deck device.
+A Stream Deck plugin for controlling PipeWeaver virtual audio devices. Works with **StreamController** and **OpenDeck**, sharing one Rust core for PipeWeaver IPC and rendering.
 
 ## What is PipeWeaver?
 
@@ -33,26 +33,88 @@ PipeWeaver is a virtual audio routing system that allows you to create and manag
 
 ## Building (developers)
 
-The Rust extension is built once and works on **any Python 3.11+** (abi3 / stable ABI). No need to match a specific minor version.
+The project is a Cargo workspace with a shared core and two host targets:
 
-- **Option 1:** `./build.sh release` — builds and copies `deckweaver/_core.abi3.so` (requires Rust/cargo).
-- **Option 2:** `pip install .` — builds the extension for the current Python (requires Rust and maturin).
+| Crate | Output | Host |
+|-------|--------|------|
+| `deckweaver-core` | Rust library | PipeWeaver IPC + rendering |
+| `deckweaver-py` | `deckweaver/_core.abi3.so` | StreamController (Python/PyO3) |
+| `deckweaver-opendeck` | `opendeck/.../bin/deckweaver` | OpenDeck (OpenAction binary) |
 
-**Version:** Set once in `Cargo.toml` (`[package] version`). The build script syncs it to `pyproject.toml` and `manifest.json`. The plugin uses it at runtime via the Rust extension.
+```bash
+# Build both targets (default)
+./build.sh release
+
+# StreamController only
+./build.sh release --streamcontroller
+
+# OpenDeck only
+./build.sh release --opendeck
+
+# Install StreamController plugin
+./build.sh release --install
+
+# Install OpenDeck plugin bundle
+./build.sh release --opendeck --install-opendeck
+```
+
+The Python extension uses PyO3's abi3 stable ABI and works on **any Python 3.11+**.
+
+- **StreamController:** `./build.sh release` or `pip install .` (maturin)
+- **OpenDeck:** copy or symlink `opendeck/com.designgears.deckweaver.sdPlugin` into your OpenDeck plugins directory, or use `--install-opendeck`
+
+**Version:** Set once in the workspace `Cargo.toml` (`[workspace.package] version`). The build script syncs it to `pyproject.toml`, `manifest.json`, and the OpenDeck manifest.
 
 ## Requirements
 
-- **StreamController**: 1.5.0-beta.12 or later
-- **PipeWeaver**: Daemon running on localhost:14565
-- **Stream Deck Device**: 
-  - Stream Deck+ or Studio (recommended for full knob functionality)
+- **PipeWeaver**: Daemon running on `localhost:14565` (Linux)
+- **One host app:**
+  - **StreamController** 1.5.0-beta.12 or later, or
+  - **OpenDeck** with Stream Deck-compatible plugin support
+- **Stream Deck device** (Stream Deck+, Studio, etc. recommended for dial actions)
 
 ## Installation
 
-1. Install the plugin through StreamController's plugin manager
-2. Ensure PipeWeaver daemon is running and accessible on `localhost:14565`
-3. Configure your preferred devices and settings in the plugin configuration
-4. Add the PipeWeaver action to your Stream Deck layout
+### StreamController
+
+1. Install the plugin through StreamController's plugin manager (or `./build.sh release --install`)
+2. Ensure PipeWeaver is running on `localhost:14565`
+3. Add a DeckWeaver action and configure devices in the plugin UI
+
+### OpenDeck
+
+1. Run `./build.sh release --opendeck` (or `--install-opendeck`)
+2. Place `opendeck/com.designgears.deckweaver.sdPlugin` in your OpenDeck plugins folder
+3. Restart OpenDeck / reload plugins
+4. Add a DeckWeaver action and configure it in the property inspector
+
+#### Encoder LCD strip (Stream Deck+ dials)
+
+Upstream OpenDeck currently renders all encoder plugin images as a centered **72×72** icon on each **200×100** LCD zone, and the UI composes them on a square canvas first. That squashes knob layouts designed for the full strip (including DeckWeaver and pipewire-audio).
+
+DeckWeaver ships a patch for [OpenDeck](https://github.com/nekename/OpenDeck) that:
+
+- Uses a **200×100** canvas for encoder slots in the UI (so plugin images are not forced square)
+- Writes **200×100** images to the full encoder zone on hardware (legacy square images still use the 72×72 icon path)
+
+Apply it to an OpenDeck source checkout, then rebuild OpenDeck:
+
+```bash
+git clone https://github.com/nekename/OpenDeck.git
+cd OpenDeck
+git apply /path/to/DeckWeaver/patches/opendeck-encoder-full-strip.patch
+npm install
+npm run tauri build -- --no-bundle
+# binary: src-tauri/target/release/opendeck
+```
+
+Or use the helper script:
+
+```bash
+./scripts/apply-opendeck-patch.sh /path/to/OpenDeck
+```
+
+Until this lands upstream (or you run a patched build), encoder knobs will look like small square icons instead of full strips.
 
 ## Usage
 

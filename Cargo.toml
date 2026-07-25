@@ -1,45 +1,32 @@
-[package]
-name = "deckweaver"
+[workspace]
+resolver = "2"
+members = [
+    "crates/deckweaver-core",
+    "crates/deckweaver-py",
+    "crates/deckweaver-opendeck",
+]
+
+[workspace.package]
 version = "0.6.1"
 edition = "2021"
 authors = ["DesignGears"]
-description = "Stream Deck plugin for PipeWeaver audio control"
 license = "GPL-2.0-only"
 repository = "https://github.com/designgears/DeckWeaver"
 
-[lib]
-name = "deckweaver"
-crate-type = ["cdylib"]
-
-[dependencies]
-# Python bindings
-pyo3 = { version = "0.27", features = ["extension-module", "abi3", "abi3-py311"] }
-pyo3-log = "0.13"
-
-# Async runtime
+[workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
-
-# WebSocket
 tokio-tungstenite = "0.28"
 futures-util = "0.3"
-
-# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# PipeWeaver official crates
 pipeweaver-ipc = { git = "https://github.com/pipeweaver/pipeweaver" }
 pipeweaver-profile = { git = "https://github.com/pipeweaver/pipeweaver" }
 pipeweaver-shared = { git = "https://github.com/pipeweaver/pipeweaver" }
-
-# Image rendering
 tiny-skia = "0.11"
 resvg = "0.45"
 image = "0.25"
 imageproc = "0.25"
 ab_glyph = "0.2"
-
-# Utilities
 parking_lot = "0.12"
 log = "0.4"
 tracing = { version = "0.1", features = ["log"] }

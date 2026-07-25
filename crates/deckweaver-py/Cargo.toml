@@ -1,0 +1,17 @@
+[package]
+name = "deckweaver-py"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Stream Deck plugin for PipeWeaver audio control"
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "deckweaver"
+crate-type = ["cdylib"]
+
+[dependencies]
+deckweaver-core = { path = "../deckweaver-core" }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3", "abi3-py311"] }
+pyo3-log = "0.13"

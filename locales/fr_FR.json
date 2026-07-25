@@ -42,6 +42,8 @@
     
     "ui.volume_step.title": "Pas Volume",
     "ui.volume_step.subtitle": "Changement de volume par pas du cadran (5-20%)",
+    "ui.show_volume.title": "Pourcentage du volume",
+    "ui.show_volume.subtitle": "Afficher le pourcentage du volume sur l'écran de l'encodeur",
     
     "ui.refresh_devices.button": "Actualiser Périphériques",
     

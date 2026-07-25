@@ -33,6 +33,7 @@ from .deckweaver import (
     ActionType,
     Device,
     DeviceType,
+    action_dimensions,
 )
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -250,8 +251,6 @@ class BaseAction(ActionBase):
     """Base action with shared Rust core functionality"""
 
     ACTION_TYPE = ActionType.knob()  # Override in subclasses
-    KNOB_DESIGN_WIDTH = 200.0
-    KNOB_DESIGN_HEIGHT = 100.0
     MIN_VOLUME_STEP = 1
     MAX_VOLUME_STEP = 20
     DEFAULT_VOLUME_STEP = 5
@@ -259,6 +258,7 @@ class BaseAction(ActionBase):
     VOLUME_STEP_RANGE = (MIN_VOLUME_STEP, MAX_VOLUME_STEP)
     VOLUME_STEP_SUBTITLE: Optional[str] = None
     SHOW_METERS_ROW = False
+    SHOW_VOLUME_ROW = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -269,6 +269,7 @@ class BaseAction(ActionBase):
         self._device_name: Optional[str] = None
         self._volume_step = self.DEFAULT_VOLUME_STEP
         self._meters_enabled = True
+        self._show_volume = True
         self._meter_invert_color = True
         self._meter_color: Optional[tuple[int, int, int, int]] = None
         self._volume_bar_color: Optional[tuple[int, int, int, int]] = None
@@ -319,7 +320,7 @@ class BaseAction(ActionBase):
                     return width, height
         except Exception:
             pass
-        return int(self.KNOB_DESIGN_WIDTH), int(self.KNOB_DESIGN_HEIGHT)
+        return action_dimensions(ActionType.knob(), is_encoder=True)
 
     def _get_dimensions(self) -> tuple[int, int]:
         """Get width, height for this action type"""
@@ -358,11 +359,12 @@ class BaseAction(ActionBase):
         if self._meter_color:
             config.meter_color = self._meter_color
         if self.ACTION_TYPE == ActionType.knob():
-            config.source_mix_b = self._source_mix == "B"
-            config.mute_profile_index = self._mute_profile_index
-            config.mute_profile_data = self._mute_profile_data
-            if self._mute_profile_index < len(self._mute_profile_data):
-                config.mute_profile_muted = self._mute_profile_data[self._mute_profile_index]
+            config.apply_knob_settings(
+                self._source_mix == "B",
+                self._mute_profile_index,
+                self._mute_profile_data,
+                self._show_volume,
+            )
         config.icon_path = self._resolved_icon_path()
 
         return config
@@ -374,6 +376,7 @@ class BaseAction(ActionBase):
         volume_step = int(settings.get("volume_step", self.DEFAULT_VOLUME_STEP))
         self._volume_step = self._normalize_volume_step(volume_step)
         self._meters_enabled = settings.get("meters_enabled", True)
+        self._show_volume = settings.get("show_volume", True)
         self._meter_invert_color = settings.get("meter_invert_color", True)
         self._meter_color = self._load_color_tuple(settings, "meter_color", self.COLOR_METER)
         self._volume_bar_color = self._load_color_tuple(settings, "volume_bar_color")
@@ -620,7 +623,17 @@ class BaseAction(ActionBase):
         self.meters_enabled_switch.set_active(self._meters_enabled)
         self.meters_enabled_switch.connect("notify::active", self._on_meters_enabled_changed)
         meters_enabled_row.add_suffix(self.meters_enabled_switch)
-        
+
+        # Volume Percentage Row (encoder strip only)
+        show_volume_row = Adw.ActionRow()
+        show_volume_row.set_title(lm.get("ui.show_volume.title"))
+        show_volume_row.set_subtitle(lm.get("ui.show_volume.subtitle"))
+
+        self.show_volume_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.show_volume_switch.set_active(self._show_volume)
+        self.show_volume_switch.connect("notify::active", self._on_show_volume_changed)
+        show_volume_row.add_suffix(self.show_volume_switch)
+
         rows = [
             self.device_expander,
             self.volume_step_row,
@@ -630,6 +643,9 @@ class BaseAction(ActionBase):
 
         if self.SHOW_METERS_ROW:
             rows.append(meters_enabled_row)
+
+        if self.SHOW_VOLUME_ROW:
+            rows.append(show_volume_row)
 
         return rows
 
@@ -786,6 +802,11 @@ class BaseAction(ActionBase):
         self._persist_settings(meters_enabled=self._meters_enabled)
         self._update_config()
 
+    def _on_show_volume_changed(self, switch: Gtk.Switch, _):
+        self._show_volume = switch.get_active()
+        self._persist_settings(show_volume=self._show_volume)
+        self._update_config()
+
     def on_enable(self):
         self._register_with_core()
 
@@ -802,6 +823,7 @@ class KnobAction(BaseAction):
     ACTION_TYPE = ActionType.knob()
     DOUBLE_TAP_WINDOW_MS = 275
     SHOW_METERS_ROW = True
+    SHOW_VOLUME_ROW = True
     MUTE_PROFILE_COUNT = 2
 
     def __init__(self, *args, **kwargs):

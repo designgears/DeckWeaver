@@ -42,6 +42,8 @@
     
     "ui.volume_step.title": "Paso de Volumen",
     "ui.volume_step.subtitle": "Cambio de volumen por paso del dial (5-20%)",
+    "ui.show_volume.title": "Porcentaje de volumen",
+    "ui.show_volume.subtitle": "Mostrar el porcentaje de volumen en la pantalla del codificador",
     
     "ui.refresh_devices.button": "Actualizar Dispositivos",
     

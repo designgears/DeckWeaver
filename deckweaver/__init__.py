@@ -23,6 +23,7 @@ KnobRenderer = _core.KnobRenderer
 SliderRenderer = _core.SliderRenderer
 ButtonRenderer = _core.ButtonRenderer
 load_icon_to_png = _core.load_icon_to_png
+action_dimensions = _core.action_dimensions
 
 __version__ = VERSION
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "SliderRenderer",
     "ButtonRenderer",
     "load_icon_to_png",
+    "action_dimensions",
 ]

@@ -1,10 +1,10 @@
 use crate::action::{ActionConfig, ActionState, ActionType};
 use crate::devices::{apply_patch_op, Device, DeviceType, HardwareDevice, Status};
-use crate::render::{pixmap_to_rgba, ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer};
+use crate::render::{
+    pixmap_to_rgba, ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer, KNOB_ICON_SIZE,
+};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -16,8 +16,10 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const RENDER_INTERVAL: Duration = Duration::from_micros(33333);
 const DEFAULT_HOST: &str = "localhost";
-const DEFAULT_PORT: u16 = 14565;
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const DEFAULT_PORT: u16 = 14565;
 
 #[derive(Debug)]
 enum Command {
@@ -68,15 +70,14 @@ enum Command {
 }
 
 #[derive(Debug, Clone)]
-struct PendingUpdate {
-    image: Option<Vec<u8>>, // Raw RGBA bytes
-    width: Option<u32>,
-    height: Option<u32>,
+pub struct PendingUpdate {
+    pub image: Option<Vec<u8>>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
     image_hash: Option<u64>,
-    label: Option<String>,
+    pub label: Option<String>,
 }
 
-#[pyclass]
 pub struct DeckWeaverCore {
     running: Arc<AtomicBool>,
     service_available: Arc<AtomicBool>,
@@ -87,10 +88,8 @@ pub struct DeckWeaverCore {
     pending_updates: Arc<RwLock<HashMap<String, PendingUpdate>>>,
 }
 
-#[pymethods]
 impl DeckWeaverCore {
-    #[new]
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             service_available: Arc::new(AtomicBool::new(false)),
@@ -102,7 +101,7 @@ impl DeckWeaverCore {
         }
     }
 
-    fn start(&mut self) {
+    pub fn start(&mut self) {
         if self.running.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -112,23 +111,23 @@ impl DeckWeaverCore {
         tracing::info!("DeckWeaverCore started");
     }
 
-    fn stop(&mut self) {
+    pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
         self.service_available.store(false, Ordering::SeqCst);
         tracing::info!("DeckWeaverCore stopped");
     }
 
-    fn register_action(&self, config: ActionConfig) {
+    pub fn register_action(&self, config: ActionConfig) {
         self.actions
             .write()
             .insert(config.action_id.clone(), ActionState::new(config));
     }
 
-    fn unregister_action(&self, action_id: &str) {
+    pub fn unregister_action(&self, action_id: &str) {
         self.actions.write().remove(action_id);
     }
 
-    fn update_action(&self, action_id: &str, config: ActionConfig) {
+    pub fn update_action(&self, action_id: &str, config: ActionConfig) {
         if let Some(state) = self.actions.write().get_mut(action_id) {
             state.config = config;
             state.device = None;
@@ -136,48 +135,32 @@ impl DeckWeaverCore {
         }
     }
 
-    fn get_pending_updates<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyDict>> {
+    pub fn get_pending_updates(&self) -> HashMap<String, PendingUpdate> {
         let mut updates = self.pending_updates.write();
-
-        let dict = PyDict::new(py);
-        let to_remove: Vec<_> = updates.keys().cloned().collect();
-
-        for action_id in &to_remove {
-            let Some(update) = updates.get(action_id) else {
-                continue;
-            };
-            let entry = PyDict::new(py);
-            if let Some(bytes) = &update.image {
-                entry.set_item("image", PyBytes::new(py, bytes))?;
-                if let Some(w) = update.width {
-                    entry.set_item("width", w)?;
-                }
-                if let Some(h) = update.height {
-                    entry.set_item("height", h)?;
-                }
-            } else {
-                entry.set_item("image", py.None())?;
-            }
-            if let Some(label) = &update.label {
-                entry.set_item("label", label)?;
-            } else {
-                entry.set_item("label", py.None())?;
-            }
-            dict.set_item(action_id, entry)?;
-        }
-
-        for action_id in to_remove {
-            updates.remove(&action_id);
-        }
-
-        Ok(dict)
+        let collected: HashMap<String, PendingUpdate> = updates
+            .iter()
+            .map(|(id, update)| {
+                (
+                    id.clone(),
+                    PendingUpdate {
+                        image: update.image.clone(),
+                        width: update.width,
+                        height: update.height,
+                        image_hash: update.image_hash,
+                        label: update.label.clone(),
+                    },
+                )
+            })
+            .collect();
+        updates.clear();
+        collected
     }
 
-    fn is_available(&self) -> bool {
+    pub fn is_available(&self) -> bool {
         self.service_available.load(Ordering::Relaxed)
     }
 
-    fn get_devices(&self) -> Vec<Device> {
+    pub fn get_devices(&self) -> Vec<Device> {
         self.status
             .read()
             .as_ref()
@@ -185,8 +168,7 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    #[pyo3(name = "get_sources")]
-    fn py_get_sources(&self) -> Vec<Device> {
+    pub fn get_sources(&self) -> Vec<Device> {
         self.status
             .read()
             .as_ref()
@@ -194,8 +176,7 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    #[pyo3(name = "get_targets")]
-    fn py_get_targets(&self) -> Vec<Device> {
+    pub fn get_targets(&self) -> Vec<Device> {
         self.status
             .read()
             .as_ref()
@@ -203,8 +184,7 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    #[pyo3(name = "get_physical_sources")]
-    fn py_get_physical_sources(&self) -> Vec<Device> {
+    pub fn get_physical_sources(&self) -> Vec<Device> {
         self.status
             .read()
             .as_ref()
@@ -212,8 +192,7 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    #[pyo3(name = "get_physical_targets")]
-    fn py_get_physical_targets(&self) -> Vec<Device> {
+    pub fn get_physical_targets(&self) -> Vec<Device> {
         self.status
             .read()
             .as_ref()
@@ -221,16 +200,14 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    #[pyo3(signature = (device_id, device_type=None))]
-    fn get_device(&self, device_id: &str, device_type: Option<DeviceType>) -> Option<Device> {
+    pub     fn get_device(&self, device_id: &str, device_type: Option<DeviceType>) -> Option<Device> {
         self.status
             .read()
             .as_ref()
             .and_then(|s| s.get_device(device_id, device_type))
     }
 
-    #[pyo3(name = "get_target_sources")]
-    fn py_get_target_sources(&self, target_id: &str) -> Vec<Device> {
+    pub fn get_target_sources(&self, target_id: &str) -> Vec<Device> {
         self.status
             .read()
             .as_ref()
@@ -238,8 +215,7 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    #[pyo3(name = "get_output_hardware_devices")]
-    fn py_get_output_hardware_devices(&self) -> Vec<HardwareDevice> {
+    pub fn get_output_hardware_devices(&self) -> Vec<HardwareDevice> {
         self.status
             .read()
             .as_ref()
@@ -247,8 +223,7 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    #[pyo3(name = "get_input_hardware_devices")]
-    fn py_get_input_hardware_devices(&self) -> Vec<HardwareDevice> {
+    pub fn get_input_hardware_devices(&self) -> Vec<HardwareDevice> {
         self.status
             .read()
             .as_ref()
@@ -256,22 +231,21 @@ impl DeckWeaverCore {
             .unwrap_or_default()
     }
 
-    fn get_hardware_device_name(&self, node_id: u32, is_input: bool) -> Option<String> {
+    pub fn get_hardware_device_name(&self, node_id: u32, is_input: bool) -> Option<String> {
         self.status
             .read()
             .as_ref()
             .and_then(|s| s.get_hardware_device_name(node_id, is_input))
     }
 
-    fn infer_device_type(&self, device_id: &str, prefer_target: bool) -> Option<DeviceType> {
+    pub fn infer_device_type(&self, device_id: &str, prefer_target: bool) -> Option<DeviceType> {
         self.status
             .read()
             .as_ref()
             .and_then(|status| status.infer_device_type(device_id, prefer_target))
     }
 
-    #[pyo3(signature = (device_id, volume, device_type=None))]
-    fn set_volume(&self, device_id: &str, volume: u8, device_type: Option<DeviceType>) -> bool {
+    pub     fn set_volume(&self, device_id: &str, volume: u8, device_type: Option<DeviceType>) -> bool {
         self.send_command(Command::SetVolume {
             device_id: device_id.to_string(),
             device_type,
@@ -279,8 +253,7 @@ impl DeckWeaverCore {
         })
     }
 
-    #[pyo3(signature = (device_id, delta, device_type=None))]
-    fn set_volume_relative(
+    pub     fn set_volume_relative(
         &self,
         device_id: &str,
         delta: i8,
@@ -293,15 +266,14 @@ impl DeckWeaverCore {
         })
     }
 
-    #[pyo3(signature = (device_id, device_type=None))]
-    fn toggle_mute(&self, device_id: &str, device_type: Option<DeviceType>) -> bool {
+    pub     fn toggle_mute(&self, device_id: &str, device_type: Option<DeviceType>) -> bool {
         self.send_command(Command::ToggleMute {
             device_id: device_id.to_string(),
             device_type,
         })
     }
 
-    fn set_source_volume_relative(&self, device_id: &str, mix_b: bool, delta: i8) -> bool {
+    pub fn set_source_volume_relative(&self, device_id: &str, mix_b: bool, delta: i8) -> bool {
         self.send_command(Command::SetSourceVolumeRelative {
             device_id: device_id.to_string(),
             mix_b,
@@ -309,7 +281,7 @@ impl DeckWeaverCore {
         })
     }
 
-    fn set_source_mute(&self, device_id: &str, mix_b: bool, muted: bool) -> bool {
+    pub fn set_source_mute(&self, device_id: &str, mix_b: bool, muted: bool) -> bool {
         self.send_command(Command::SetSourceMute {
             device_id: device_id.to_string(),
             mix_b,
@@ -317,21 +289,21 @@ impl DeckWeaverCore {
         })
     }
 
-    fn set_target_mute(&self, device_id: &str, muted: bool) -> bool {
+    pub fn set_target_mute(&self, device_id: &str, muted: bool) -> bool {
         self.send_command(Command::SetTargetMute {
             device_id: device_id.to_string(),
             muted,
         })
     }
 
-    fn set_target_mix(&self, device_id: &str, mix_b: bool) -> bool {
+    pub fn set_target_mix(&self, device_id: &str, mix_b: bool) -> bool {
         self.send_command(Command::SetTargetMix {
             device_id: device_id.to_string(),
             mix_b,
         })
     }
 
-    fn toggle_target_mute(&self, device_id: &str) -> bool {
+    pub fn toggle_target_mute(&self, device_id: &str) -> bool {
         let muted = {
             self.status
                 .read()
@@ -348,7 +320,7 @@ impl DeckWeaverCore {
         })
     }
 
-    fn toggle_target_mix(&self, device_id: &str) -> bool {
+    pub fn toggle_target_mix(&self, device_id: &str) -> bool {
         let mix_b = {
             self.status
                 .read()
@@ -365,7 +337,7 @@ impl DeckWeaverCore {
         })
     }
 
-    fn toggle_source_volumes_linked(&self, device_id: &str) -> bool {
+    pub fn toggle_source_volumes_linked(&self, device_id: &str) -> bool {
         let linked = {
             self.status
                 .read()
@@ -382,7 +354,7 @@ impl DeckWeaverCore {
         })
     }
 
-    fn apply_mute_profile(&self, config: &ActionConfig) -> bool {
+    pub fn apply_mute_profile(&self, config: &ActionConfig) -> bool {
         let Some(device_id) = &config.device_id else {
             return false;
         };
@@ -403,15 +375,15 @@ impl DeckWeaverCore {
         }
     }
 
-    fn switch_output_hardware_device(&self, target_id: &str, node_id: u32) -> bool {
+    pub fn switch_output_hardware_device(&self, target_id: &str, node_id: u32) -> bool {
         self.switch_physical_hardware_device(target_id, node_id, false)
     }
 
-    fn switch_input_hardware_device(&self, source_id: &str, node_id: u32) -> bool {
+    pub fn switch_input_hardware_device(&self, source_id: &str, node_id: u32) -> bool {
         self.switch_physical_hardware_device(source_id, node_id, true)
     }
 
-    fn switch_physical_hardware_device(&self, device_id: &str, node_id: u32, is_input: bool) -> bool {
+    pub fn switch_physical_hardware_device(&self, device_id: &str, node_id: u32, is_input: bool) -> bool {
         let Some(status) = self.status.read().as_ref().cloned() else {
             return false;
         };
@@ -456,7 +428,7 @@ impl DeckWeaverCore {
         success
     }
 
-    fn get_action_device_name(&self, action_id: &str) -> Option<String> {
+    pub fn get_action_device_name(&self, action_id: &str) -> Option<String> {
         self.actions
             .read()
             .get(action_id)
@@ -780,7 +752,7 @@ impl DeckWeaverCore {
                             })
                             .map(|(id, s)| {
                                 let max_icon_size = match s.config.action_type {
-                                    ActionType::Knob => 52.0,
+                                    ActionType::Knob => KNOB_ICON_SIZE,
                                     _ => (s.config.width as f32) * 0.5,
                                 };
                                 let cached_icon = s.get_cached_icon(
@@ -830,7 +802,7 @@ impl DeckWeaverCore {
                         let cached_knob_base = if uses_knob_meter_cache && needs_knob_base_rebuild {
                             if let Some(ref dev) = device {
                                 let params = knob_render_params(&config, dev, 0);
-                                let base_pixmap = renderers.knob.render_base(
+                                let base_pixmap = renderers.knob(config.width, config.height).render_base(
                                     &params,
                                     config.icon_png.clone(),
                                     cached_icon.as_ref(),
@@ -995,6 +967,7 @@ fn knob_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -
     let is_source = device_is_source(config, device);
 
     RenderParams {
+        name: device.name.clone(),
         volume: device.volume,
         is_muted: device.is_muted,
         is_source,
@@ -1012,11 +985,13 @@ fn knob_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -
         source_volumes_linked: device.source_volumes_linked.unwrap_or(false),
         mute_profile: config.mute_profile_index,
         mute_profile_muted: config.mute_profile_muted,
+        show_volume: config.show_volume,
     }
 }
 
 fn slider_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -> RenderParams {
     RenderParams {
+        name: device.name.clone(),
         volume: device.volume,
         is_muted: false,
         is_source: device_is_source(config, device),
@@ -1030,6 +1005,7 @@ fn slider_render_params(config: &ActionConfig, device: &Device, meter_value: u8)
         source_volumes_linked: false,
         mute_profile: 0,
         mute_profile_muted: false,
+        show_volume: false,
     }
 }
 
@@ -1177,7 +1153,7 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
 }
 
 struct Renderers {
-    knob: KnobRenderer,
+    knobs: HashMap<(u32, u32), KnobRenderer>,
     sliders: HashMap<u32, SliderRenderer>,
     buttons: HashMap<u32, ButtonRenderer>,
 }
@@ -1185,10 +1161,16 @@ struct Renderers {
 impl Renderers {
     fn new() -> Self {
         Self {
-            knob: KnobRenderer::new(200, 100),
+            knobs: HashMap::new(),
             sliders: HashMap::new(),
             buttons: HashMap::new(),
         }
+    }
+
+    fn knob(&mut self, width: u32, height: u32) -> &mut KnobRenderer {
+        self.knobs
+            .entry((width, height))
+            .or_insert_with(|| KnobRenderer::new(width, height))
     }
 
     fn slider(&mut self, width: u32) -> &mut SliderRenderer {
@@ -1205,7 +1187,9 @@ impl Renderers {
 
     fn render_unavailable(&mut self, config: &ActionConfig) -> Option<(Vec<u8>, u32, u32)> {
         match config.action_type {
-            ActionType::Knob => self.knob.render_unavailable_internal(),
+            ActionType::Knob => self
+                .knob(config.width, config.height)
+                .render_unavailable_internal(),
             ActionType::Slider => self.slider(config.width).render_unavailable_internal(),
             ActionType::Button => self.button(config.width).render_unavailable_internal(),
         }
@@ -1213,7 +1197,9 @@ impl Renderers {
 
     fn render_loading(&mut self, config: &ActionConfig) -> Option<(Vec<u8>, u32, u32)> {
         match config.action_type {
-            ActionType::Knob => self.knob.render_loading_internal(),
+            ActionType::Knob => self
+                .knob(config.width, config.height)
+                .render_loading_internal(),
             ActionType::Slider => self.slider(config.width).render_loading_internal(),
             ActionType::Button => self.button(config.width).render_loading_internal(),
         }
@@ -1230,16 +1216,15 @@ impl Renderers {
         match config.action_type {
             ActionType::Knob => {
                 let params = knob_render_params(config, device, meter_value);
+                let knob = self.knob(config.width, config.height);
                 if let Some(cached_base) = cached_knob_base {
                     let mut pixmap = cached_base.pixmap.clone();
-                    self.knob.render_meter_overlay(&mut pixmap, &params);
+                    knob.render_meter_overlay(&mut pixmap, &params);
                     pixmap_to_rgba(&pixmap)
                 } else if let Some(cached) = cached_icon {
-                    self.knob
-                        .render_internal_png_with_cached(&params, Some(cached))
+                    knob.render_internal_png_with_cached(&params, Some(cached))
                 } else {
-                    self.knob
-                        .render_internal_png(&params, config.icon_png.clone())
+                    knob.render_internal_png(&params, config.icon_png.clone())
                 }
             }
             ActionType::Slider => {

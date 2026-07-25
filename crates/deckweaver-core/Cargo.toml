@@ -1,0 +1,27 @@
+[package]
+name = "deckweaver-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Core PipeWeaver control and rendering logic for DeckWeaver"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+pipeweaver-ipc = { workspace = true }
+pipeweaver-profile = { workspace = true }
+pipeweaver-shared = { workspace = true }
+tiny-skia = { workspace = true }
+resvg = { workspace = true }
+image = { workspace = true }
+imageproc = { workspace = true }
+ab_glyph = { workspace = true }
+parking_lot = { workspace = true }
+log = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

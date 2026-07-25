@@ -1,12 +1,10 @@
 use crate::devices::Device;
 use crate::devices::DeviceType;
 use parking_lot::RwLock;
-use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
-#[pyclass]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionType {
     Knob,
@@ -14,103 +12,34 @@ pub enum ActionType {
     Button,
 }
 
-#[pymethods]
-impl ActionType {
-    #[staticmethod]
-    fn knob() -> Self {
-        ActionType::Knob
-    }
-
-    #[staticmethod]
-    fn slider() -> Self {
-        ActionType::Slider
-    }
-
-    #[staticmethod]
-    fn button() -> Self {
-        ActionType::Button
-    }
-
-    fn __repr__(&self) -> &'static str {
-        match self {
-            ActionType::Knob => "ActionType.Knob",
-            ActionType::Slider => "ActionType.Slider",
-            ActionType::Button => "ActionType.Button",
-        }
-    }
-
-    fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp) -> bool {
-        match op {
-            pyo3::basic::CompareOp::Eq => self == other,
-            pyo3::basic::CompareOp::Ne => self != other,
-            _ => false,
-        }
-    }
-
-    fn __hash__(&self) -> u64 {
-        match self {
-            ActionType::Knob => 0,
-            ActionType::Slider => 1,
-            ActionType::Button => 2,
-        }
-    }
-}
-
-#[pyclass]
 #[derive(Debug, Clone)]
 pub struct ActionConfig {
-    #[pyo3(get, set)]
     pub action_id: String,
-    #[pyo3(get, set)]
-    pub action_type: ActionType,
-    #[pyo3(get, set)]
-    pub device_id: Option<String>,
-    #[pyo3(get, set)]
-    pub device_type: Option<DeviceType>,
-    #[pyo3(get, set)]
-    pub volume_step: i8,
-    #[pyo3(get, set)]
-    pub width: u32,
-    #[pyo3(get, set)]
-    pub height: u32,
-    #[pyo3(get, set)]
-    pub meters_enabled: bool,
-    #[pyo3(get, set)]
-    pub meter_invert: bool,
-    #[pyo3(get, set)]
-    pub volume_bar_color: Option<(u8, u8, u8, u8)>,
-    #[pyo3(get, set)]
-    pub meter_color: Option<(u8, u8, u8, u8)>,
-    #[pyo3(get, set)]
-    pub orientation: String,
-    #[pyo3(get, set)]
-    pub is_top: bool,
-    #[pyo3(get, set)]
-    pub icon_png: Option<Vec<u8>>,
-    #[pyo3(get, set)]
-    pub icon_path: Option<String>,
-    #[pyo3(get, set)]
-    pub button_overlay: bool,
-    #[pyo3(get, set)]
-    pub source_mix_b: bool,
-    #[pyo3(get, set)]
-    pub mute_profile_index: u8,
-    #[pyo3(get, set)]
-    pub mute_profile_muted: bool,
-    #[pyo3(get, set)]
+        pub action_type: ActionType,
+        pub device_id: Option<String>,
+        pub device_type: Option<DeviceType>,
+        pub volume_step: i8,
+        pub width: u32,
+        pub height: u32,
+        pub meters_enabled: bool,
+        pub meter_invert: bool,
+        pub volume_bar_color: Option<(u8, u8, u8, u8)>,
+        pub meter_color: Option<(u8, u8, u8, u8)>,
+        pub orientation: String,
+        pub is_top: bool,
+        pub icon_png: Option<Vec<u8>>,
+        pub icon_path: Option<String>,
+        pub button_overlay: bool,
+        pub source_mix_b: bool,
+        pub mute_profile_index: u8,
+        pub mute_profile_muted: bool,
     pub mute_profile_data: Vec<bool>,
+    /// Knob only: draw the volume percentage in the top right of the encoder strip.
+    pub show_volume: bool,
 }
 
-#[pymethods]
 impl ActionConfig {
-    #[new]
-    #[pyo3(signature = (
-        action_id,
-        action_type,
-        width=200,
-        height=100
-    ))]
-    fn new(action_id: String, action_type: ActionType, width: u32, height: u32) -> Self {
+    pub fn new(action_id: String, action_type: ActionType, width: u32, height: u32) -> Self {
         Self {
             action_id,
             action_type,
@@ -132,6 +61,7 @@ impl ActionConfig {
             mute_profile_index: 0,
             mute_profile_muted: false,
             mute_profile_data: vec![false, false],
+            show_volume: true,
         }
     }
 }
@@ -177,6 +107,9 @@ impl ActionState {
     pub fn base_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         if let Some(ref device) = self.device {
+            // The knob renderer draws the device name into the base image, so a rename has to
+            // invalidate the cached base.
+            device.name.hash(&mut hasher);
             device.volume.hash(&mut hasher);
             device.is_muted.hash(&mut hasher);
             device.source_mix_a_muted.hash(&mut hasher);
@@ -208,6 +141,7 @@ impl ActionState {
             self.config.source_mix_b.hash(&mut hasher);
             self.config.mute_profile_index.hash(&mut hasher);
             self.config.mute_profile_data.hash(&mut hasher);
+            self.config.show_volume.hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -311,11 +245,13 @@ impl ActionState {
             self.config.source_mix_b.hash(&mut hasher);
             self.config.mute_profile_index.hash(&mut hasher);
             self.config.mute_profile_data.hash(&mut hasher);
+            self.config.show_volume.hash(&mut hasher);
         }
         self.get_meter().hash(&mut hasher);
 
         if let Some(ref device) = self.device {
             device.id.hash(&mut hasher);
+            device.name.hash(&mut hasher);
             device.volume.hash(&mut hasher);
             device.is_muted.hash(&mut hasher);
             device.source_mix_a_muted.hash(&mut hasher);
@@ -344,6 +280,28 @@ mod tests {
         ActionConfig::new("test-action".to_string(), ActionType::Knob, 200, 100)
     }
 
+    fn device(name: &str) -> Device {
+        Device {
+            id: "device-1".to_string(),
+            name: name.to_string(),
+            device_type: DeviceType::Source,
+            is_physical: false,
+            volume: 50,
+            is_muted: false,
+            color: None,
+            source_mix_a_volume: Some(50),
+            source_mix_b_volume: Some(50),
+            source_mix_a_muted: Some(false),
+            source_mix_b_muted: Some(false),
+            source_mute_a_all: None,
+            source_mute_b_all: None,
+            source_mute_a_target_count: None,
+            source_mute_b_target_count: None,
+            source_volumes_linked: Some(false),
+            target_mix_b: None,
+        }
+    }
+
     #[test]
     fn first_frame_requires_render() {
         let state = ActionState::new(config());
@@ -357,5 +315,27 @@ mod tests {
         assert!(state.needs_render());
         state.set_meter(17);
         assert!(state.needs_render());
+    }
+
+    /// The knob renderer draws the device name, so a rename has to invalidate both the frame
+    /// hash and the cached base pixmap — otherwise the old name stays on the strip until some
+    /// unrelated field happens to change.
+    #[test]
+    fn rename_triggers_render_and_base_rebuild() {
+        let mut state = ActionState::new(config());
+        state.device = Some(device("Chat"));
+        assert!(state.needs_render());
+        assert!(!state.needs_render());
+
+        let base_hash = state.base_hash();
+        *state.cached_base.write() = Some(CachedBaseRender {
+            pixmap: tiny_skia::Pixmap::new(200, 100).unwrap(),
+            base_hash,
+        });
+        assert!(!state.needs_base_rebuild());
+
+        state.device = Some(device("Game"));
+        assert!(state.needs_render());
+        assert!(state.needs_base_rebuild());
     }
 }

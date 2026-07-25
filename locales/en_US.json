@@ -52,6 +52,8 @@
     
     "ui.volume_step.title": "Volume Step",
     "ui.volume_step.subtitle": "Volume change per dial step (5-20%)",
+    "ui.show_volume.title": "Volume Percentage",
+    "ui.show_volume.subtitle": "Show the volume percentage on the encoder strip",
     
     "ui.refresh_devices.button": "Refresh Devices",
     

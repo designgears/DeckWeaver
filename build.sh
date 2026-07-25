@@ -1,134 +1,152 @@
 #!/bin/bash
-# Build script for DeckWeaver Rust extension module
-# Builds the Rust code (abi3: one .so for Python 3.11+) and copies to deckweaver/
+# Build DeckWeaver for StreamController (Python/PyO3) and OpenDeck (native binary)
 #
-# Usage: ./build.sh [clean|dev|release] [--install|-i]
-#   clean   - Clean build artifacts
-#   dev     - Build in dev mode (debug symbols, fast compile)
-#   release - Build in release mode (optimized, stripped, default)
-#   --install, -i - After build, copy plugin to StreamController plugins folder
-#
-# Version-agnostic: the extension uses PyO3's abi3 (stable ABI), so a single
-# build works on any Python 3.11+. No need for pyenv or multiple Python versions.
-# Alternatively: pip install . (or maturin build) builds the same abi3 wheel.
+# Usage: ./build.sh [clean|dev|release] [targets] [install flags]
+#   clean|dev|release - build profile (default: release)
+#   --streamcontroller, --sc  - build StreamController Python extension only
+#   --opendeck, --od          - build OpenDeck plugin binary only
+#   --all                     - build both targets (default)
+#   --install, -i             - install StreamController plugin after build
+#   --install-opendeck        - symlink/copy OpenDeck plugin into OpenDeck plugins dir
 
-# Get the project root directory
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Check for required tools
-if ! command -v cargo &> /dev/null 2>&1; then
-    echo "Error: cargo not found (install via rustup)"
-    exit 1
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "Error: cargo not found (install via rustup)"
+  exit 1
 fi
 
-# Sync version from Cargo.toml (single source of truth) to pyproject.toml and manifest.json
 sync_version() {
-    VERSION=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
-    if [ -n "$VERSION" ]; then
-        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-        sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" manifest.json
-    fi
+  VERSION=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
+  if [ -n "$VERSION" ]; then
+    sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+    sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" manifest.json
+    sed -i "s/\"Version\": \".*\"/\"Version\": \"$VERSION\"/" opendeck/com.designgears.deckweaver.sdPlugin/manifest.json
+  fi
 }
 sync_version
 
-# Parse command line arguments
-PROFILE=""
-INSTALL_PLUGIN=false
+PROFILE="release"
+BUILD_SC=true
+BUILD_OD=true
+INSTALL_SC=false
+INSTALL_OD=false
+
 for arg in "$@"; do
-    case "$arg" in
-        --install|-i) INSTALL_PLUGIN=true ;;
-        clean|dev|release) [ -z "$PROFILE" ] && PROFILE="$arg" ;;
-        *) echo "Error: Unknown option '$arg'"; echo "Usage: $0 [clean|dev|release] [--install|-i]"; exit 1 ;;
-    esac
+  case "$arg" in
+    clean|dev|release) PROFILE="$arg" ;;
+    --streamcontroller|--sc) BUILD_SC=true; BUILD_OD=false ;;
+    --opendeck|--od) BUILD_SC=false; BUILD_OD=true ;;
+    --all) BUILD_SC=true; BUILD_OD=true ;;
+    --install|-i) INSTALL_SC=true ;;
+    --install-opendeck) INSTALL_OD=true ;;
+    *)
+      echo "Error: Unknown option '$arg'"
+      echo "Usage: $0 [clean|dev|release] [--streamcontroller|--opendeck|--all] [--install|-i] [--install-opendeck]"
+      exit 1
+      ;;
+  esac
 done
-[ -z "$PROFILE" ] && PROFILE="release"
 
-# Handle clean command
 if [ "$PROFILE" = "clean" ]; then
-    set -e  # Enable exit on error for clean
-    echo "Cleaning build artifacts..."
-    cargo clean
-    echo "Removing venvs..."
-    rm -rf .venv-3.*
-    echo "Removing compiled extension modules..."
-    rm -f deckweaver/_core*.so
-    echo "Clean complete!"
-    exit 0
+  echo "Cleaning build artifacts..."
+  cargo clean
+  rm -rf .venv-3.*
+  rm -f deckweaver/_core*.so
+  rm -rf opendeck/com.designgears.deckweaver.sdPlugin/*/bin
+  echo "Clean complete!"
+  exit 0
 fi
 
-# Validate profile
 if [ "$PROFILE" != "dev" ] && [ "$PROFILE" != "release" ]; then
-    echo "Error: Invalid profile '$PROFILE'"
-    echo "Usage: $0 [clean|dev|release] [--install|-i]"
-    exit 1
+  echo "Error: Invalid profile '$PROFILE'"
+  exit 1
 fi
 
-# Single build mode (abi3: one .so for Python 3.11+)
-set -e  # Enable exit on error for single build
-echo "Building DeckWeaver Rust extension module (abi3, Python 3.11+)..."
-echo "Profile: $PROFILE"
-echo ""
-
-TARGET_NAME="_core.abi3.so"
-TARGET_DIR="deckweaver"
-
-# Set build flags
+CARGO_FLAGS=()
+TARGET_SUBDIR="debug"
 if [ "$PROFILE" = "release" ]; then
-    CARGO_FLAGS="--release"
-    TARGET_SUBDIR="release"
-else
-    CARGO_FLAGS=""
-    TARGET_SUBDIR="debug"
+  CARGO_FLAGS+=(--release)
+  TARGET_SUBDIR="release"
 fi
 
-SOURCE_LIB="target/${TARGET_SUBDIR}/libdeckweaver.so"
+HOST_TRIPLE="$(rustc -vV | awk '/^host: / {print $2}')"
+OD_PLUGIN_ROOT="opendeck/com.designgears.deckweaver.sdPlugin"
+OD_BIN_DIR="$OD_PLUGIN_ROOT/$HOST_TRIPLE/bin"
 
-echo "Target: ${TARGET_DIR}/${TARGET_NAME}"
-echo ""
+if [ "$BUILD_SC" = true ]; then
+  echo "Building StreamController extension (PyO3)..."
+  cargo build -p deckweaver-py "${CARGO_FLAGS[@]}"
+  mkdir -p deckweaver
+  cp "target/$TARGET_SUBDIR/libdeckweaver.so" deckweaver/_core.abi3.so
+  echo "StreamController extension: deckweaver/_core.abi3.so"
+fi
 
-# Build the Rust code (abi3 build does not require a Python interpreter)
-echo "Building Rust code..."
-cargo build $CARGO_FLAGS
+if [ "$BUILD_OD" = true ]; then
+  echo "Generating Font Awesome icon manifest..."
+  python3 "$SCRIPT_DIR/scripts/generate-fa-icons-json.py"
 
-# Check if the source .so file exists
-if [ ! -f "$SOURCE_LIB" ]; then
-    echo "Error: $SOURCE_LIB not found after build!"
+  echo "Building OpenDeck plugin binary for $HOST_TRIPLE..."
+  cargo build -p deckweaver-opendeck "${CARGO_FLAGS[@]}"
+  mkdir -p "$OD_BIN_DIR"
+  OD_BIN=""
+  for candidate in "target/$TARGET_SUBDIR/deckweaver-opendeck" target/$TARGET_SUBDIR/deps/deckweaver-*; do
+    if [ -f "$candidate" ] && [ -x "$candidate" ] && file "$candidate" | grep -q 'ELF.*executable'; then
+      OD_BIN="$candidate"
+      break
+    fi
+  done
+  if [ -z "$OD_BIN" ]; then
+    echo "Error: OpenDeck binary not found after build"
     exit 1
+  fi
+  cp "$OD_BIN" "$OD_BIN_DIR/deckweaver"
+  chmod +x "$OD_BIN_DIR/deckweaver"
+
+  mkdir -p "$OD_PLUGIN_ROOT/icons"
+  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/plugin.png" 2>/dev/null || true
+  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/plugin@2x.png" 2>/dev/null || true
+  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/knob.png" 2>/dev/null || true
+  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/button.png" 2>/dev/null || true
+  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/slider.png" 2>/dev/null || true
+
+  echo "OpenDeck plugin bundle: $OD_PLUGIN_ROOT"
+  echo "OpenDeck binary: $OD_BIN_DIR/deckweaver"
 fi
 
-# Create target directory if it doesn't exist
-mkdir -p "$TARGET_DIR"
-
-# Copy the .so file to the target location (abi3 name works on all Python 3.11+)
-echo "Copying $SOURCE_LIB -> $TARGET_DIR/$TARGET_NAME"
-cp "$SOURCE_LIB" "$TARGET_DIR/$TARGET_NAME"
-
-# Copy plugin to StreamController plugins folder (only when --install or -i is passed)
-PLUGIN_DEST="${DECKWEAVER_PLUGIN_DEST:-$HOME/.var/app/com.core447.StreamController/data/plugins/com_designgears_DeckWeaver}"
-if [ "$INSTALL_PLUGIN" = true ] && [ -d "$(dirname "$PLUGIN_DEST")" ]; then
-    echo "Copying plugin to StreamController..."
+if [ "$INSTALL_SC" = true ]; then
+  PLUGIN_DEST="${DECKWEAVER_PLUGIN_DEST:-$HOME/.var/app/com.core447.StreamController/data/plugins/com_designgears_DeckWeaver}"
+  if [ -d "$(dirname "$PLUGIN_DEST")" ]; then
+    echo "Installing StreamController plugin to $PLUGIN_DEST"
     rm -rf "$PLUGIN_DEST"
     mkdir -p "$PLUGIN_DEST"
-    if command -v rsync &> /dev/null; then
-        rsync -a \
-            --exclude='.git' \
-            --exclude='target' \
-            --exclude='src' \
-            --exclude='.venv*' \
-            --exclude='build.sh' \
-            --exclude='Cargo.toml' \
-            --exclude='*.md' \
-            --exclude='.gitignore' \
-            "$SCRIPT_DIR/" "$PLUGIN_DEST/"
-    else
-        for f in main.py manifest.json attribution.json pyproject.toml; do [ -e "$f" ] && cp "$f" "$PLUGIN_DEST/"; done
-        for d in deckweaver locales assets store; do [ -d "$d" ] && cp -r "$d" "$PLUGIN_DEST/"; done
-    fi
-    echo "Plugin installed at $PLUGIN_DEST"
-else
-    echo "Note: StreamController plugins dir not found, skipping install (path: $(dirname "$PLUGIN_DEST"))"
+    rsync -a \
+      --exclude='.git' \
+      --exclude='target' \
+      --exclude='crates' \
+      --exclude='opendeck' \
+      --exclude='streamcontroller' \
+      --exclude='.venv*' \
+      --exclude='build.sh' \
+      --exclude='Cargo.toml' \
+      --exclude='Cargo.lock' \
+      --exclude='*.md' \
+      --exclude='.gitignore' \
+      "$SCRIPT_DIR/" "$PLUGIN_DEST/"
+  else
+    echo "Note: StreamController plugins dir not found, skipping install"
+  fi
 fi
 
-echo ""
-echo "Build complete! Extension module is at $TARGET_DIR/$TARGET_NAME"
+if [ "$INSTALL_OD" = true ]; then
+  OD_DEST="${DECKWEAVER_OPENDECK_DEST:-$HOME/.config/opendeck/plugins/com.designgears.deckweaver.sdPlugin}"
+  mkdir -p "$(dirname "$OD_DEST")"
+  rm -rf "$OD_DEST"
+  cp -a "$OD_PLUGIN_ROOT" "$OD_DEST"
+  echo "Installed OpenDeck plugin to $OD_DEST"
+fi
+
+echo "Build complete."

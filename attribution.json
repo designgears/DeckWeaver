@@ -68,5 +68,19 @@
         "license": "MIT",
         "license-url": "https://opensource.org/licenses/MIT",
         "description": "Structured, event-based diagnostic logging framework"
+    },
+    "fontawesome-free": {
+        "copyright": "Fonticons, Inc.",
+        "original-url": "https://fontawesome.com",
+        "license": "CC BY 4.0",
+        "license-url": "https://creativecommons.org/licenses/by/4.0/",
+        "description": "Font Awesome Free icon SVG assets (OpenDeck property inspector only)"
+    },
+    "inter": {
+        "copyright": "The Inter Project Authors",
+        "original-url": "https://github.com/rsms/inter",
+        "license": "OFL-1.1",
+        "license-url": "https://openfontlicense.org/",
+        "description": "Inter typeface, subset and embedded for on-device text rendering"
     }
 }

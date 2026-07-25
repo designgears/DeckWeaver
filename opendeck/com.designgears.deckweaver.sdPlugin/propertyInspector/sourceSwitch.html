@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DeckWeaver Output Switch</title>
+  <link rel="stylesheet" href="pi.css" />
+  <script src="pi.js"></script>
+</head>
+<body class="pi">
+  <div id="status" class="status">Connecting…</div>
+
+  <div id="iconPickerMount"></div>
+
+  <section class="section">
+    <label class="field-label" for="outputDevice">Hardware output target</label>
+    <select id="outputDevice"></select>
+  </section>
+
+  <section class="section">
+    <label class="field-label" for="physicalDevice">Physical output device</label>
+    <select id="physicalDevice"></select>
+  </section>
+
+  <footer class="pi-footer">
+    <button id="refresh" type="button" class="btn-secondary">Refresh devices</button>
+  </footer>
+
+  <script>
+    initSourceSwitchInspector({ inputMode: false });
+  </script>
+</body>
+</html>

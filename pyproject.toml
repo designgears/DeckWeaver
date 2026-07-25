@@ -12,7 +12,5 @@ authors = [{ name = "DesignGears" }]
 requires-python = ">=3.11"
 
 [tool.maturin]
-# Extension is _core (pymodule name), not deckweaver (crate name).
+manifest-path = "crates/deckweaver-py/Cargo.toml"
 module-name = "deckweaver._core"
-# pip install . builds the extension for the active Python (version-agnostic at install time).
-# With abi3 in Cargo.toml, one .so works across Python 3.11+.

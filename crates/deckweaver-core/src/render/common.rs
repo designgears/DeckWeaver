@@ -1,13 +1,5 @@
-use ab_glyph::{point, Font, FontArc, GlyphId, PxScale, ScaleFont};
-use image::{Rgba as ImageRgba, RgbaImage};
-use image::imageops::FilterType;
-use imageproc::drawing::draw_text_mut;
-use std::fs;
-use std::sync::OnceLock;
-use tiny_skia::{
-    Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode,
-    Stroke, Transform,
-};
+use image::RgbaImage;
+use tiny_skia::{Color, FillRule, Mask, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgba {
@@ -116,14 +108,19 @@ pub const COLOR_TRANSPARENT: Rgba = Rgba::new(0, 0, 0, 0);
 pub const COLOR_BLACK: Rgba = Rgba::rgb(0, 0, 0);
 pub const COLOR_WHITE: Rgba = Rgba::rgb(255, 255, 255);
 pub const COLOR_RED: Rgba = Rgba::rgb(255, 0, 0);
-pub const COLOR_SOURCE_FILL: Rgba = Rgba::rgb(102, 179, 255);
-pub const COLOR_TARGET_FILL: Rgba = Rgba::rgb(102, 255, 102);
+/// Fallback accents when PipeWeaver reports no device colour and the user set no override.
+/// Also used by the slider renderer.
+pub const COLOR_SOURCE_FILL: Rgba = Rgba::rgb(90, 169, 245);
+pub const COLOR_TARGET_FILL: Rgba = Rgba::rgb(79, 208, 138);
 pub const COLOR_GUTTER_DARK: Rgba = Rgba::rgb(120, 120, 120);
 pub const COLOR_GUTTER_LIGHT: Rgba = Rgba::rgb(220, 220, 220);
 const GUTTER_LUMINANCE_THRESHOLD: f32 = 0.1;
 
 #[derive(Debug, Clone, Default)]
 pub struct RenderParams {
+    /// Device name as reported by PipeWeaver. Drawn by the knob renderer; the hosts suppress
+    /// their own title overlay for that action.
+    pub name: String,
     pub volume: u8,
     pub is_muted: bool,
     pub is_source: bool,
@@ -137,6 +134,8 @@ pub struct RenderParams {
     pub source_volumes_linked: bool,
     pub mute_profile: u8,
     pub mute_profile_muted: bool,
+    /// Draw the volume percentage in the top right of the encoder strip.
+    pub show_volume: bool,
 }
 
 impl RenderParams {
@@ -211,47 +210,50 @@ impl Rect {
     }
 
     pub fn draw_filled(self, pixmap: &mut Pixmap, color: Rgba) {
+        self.draw_filled_clipped(pixmap, color, None);
+    }
+
+    /// Fill, optionally clipped to a [`Rect::clip_mask`].
+    pub fn draw_filled_clipped(self, pixmap: &mut Pixmap, color: Rgba, clip: Option<&Mask>) {
         if let Some(path) = rounded_rect_path(self.x, self.y, self.w, self.h, self.radius) {
             pixmap.fill_path(
                 &path,
                 &solid_paint(color),
                 FillRule::Winding,
                 Transform::identity(),
-                None,
+                clip,
             );
         }
     }
 
-    pub fn draw_vertical_gradient_filled(self, pixmap: &mut Pixmap, top: Rgba, bottom: Rgba) {
-        let Some(path) = rounded_rect_path(self.x, self.y, self.w, self.h, self.radius) else {
-            return;
-        };
+    /// Anti-aliased mask of this rect's outline, for clipping content drawn inside it.
+    ///
+    /// A partial fill is a rounded rect in its own right, and `rounded_rect_path` clamps its
+    /// radius to `w / 2` — so once the fill is narrower than the bar is tall, its corners are
+    /// squarer than the bar's and poke outside them. Clipping keeps the fill inside the track
+    /// at every width.
+    pub fn clip_mask(self, width: u32, height: u32) -> Option<Mask> {
+        let path = rounded_rect_path(self.x, self.y, self.w, self.h, self.radius)?;
+        let mut mask = Mask::new(width, height)?;
+        mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+        Some(mask)
+    }
 
-        let Some(shader) = LinearGradient::new(
-            Point::from_xy(self.x, self.y),
-            Point::from_xy(self.x, self.y + self.h),
-            vec![
-                GradientStop::new(0.0, top.as_color()),
-                GradientStop::new(1.0, bottom.as_color()),
-            ],
-            SpreadMode::Pad,
-            Transform::identity(),
-        ) else {
-            return;
-        };
-
-        let paint = Paint {
-            anti_alias: true,
-            shader,
-            ..Default::default()
-        };
-        pixmap.fill_path(
-            &path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
+    /// Stroke that lies entirely *inside* the rect.
+    ///
+    /// tiny-skia centres strokes on the path, so a stroked bar ends up half a stroke wider on
+    /// every side than an unstroked one built from the same rect — enough to make the volume
+    /// bar and the meter lane below it visibly mismatched.
+    pub fn draw_inset_stroke(self, pixmap: &mut Pixmap, color: Rgba, width: f32) {
+        let half = width * 0.5;
+        Rect::new(
+            self.x + half,
+            self.y + half,
+            (self.w - width).max(0.0),
+            (self.h - width).max(0.0),
+            (self.radius - half).max(0.0),
+        )
+        .draw_stroked(pixmap, color, width);
     }
 
     pub fn draw_stroked(self, pixmap: &mut Pixmap, color: Rgba, width: f32) {
@@ -319,51 +321,6 @@ pub fn draw_diagonal_line(
     stroke_line(pixmap, x1, y1, x2, y2, width, color);
 }
 
-const TEXT_SUPERSAMPLE: u32 = 2;
-
-pub fn draw_right_text(
-    pixmap: &mut Pixmap,
-    text: &str,
-    rect: Rect,
-    font_size: f32,
-    color: Rgba,
-) {
-    let Some(font) = mix_font() else {
-        return;
-    };
-
-    let scale = PxScale::from(font_size * TEXT_SUPERSAMPLE as f32);
-    let width = (rect.w.ceil().max(1.0) as u32) * TEXT_SUPERSAMPLE;
-    let height = (rect.h.ceil().max(1.0) as u32) * TEXT_SUPERSAMPLE;
-    let Some((min_x, min_y, max_x, max_y)) = text_pixel_bounds(font, scale, text) else {
-        return;
-    };
-
-    let text_w = (max_x - min_x).ceil().max(1.0);
-    let text_h = (max_y - min_y).ceil().max(1.0);
-    let text_x = (width as f32 - text_w - min_x).round() as i32;
-    let text_y = ((height as f32 - text_h) * 0.5 - min_y).round() as i32;
-
-    let mut rgba = RgbaImage::from_pixel(width, height, ImageRgba([0, 0, 0, 0]));
-    draw_text_mut(
-        &mut rgba,
-        ImageRgba([color.r, color.g, color.b, color.a]),
-        text_x,
-        text_y,
-        scale,
-        font,
-        text,
-    );
-
-    let scaled = image::imageops::resize(
-        &rgba,
-        width / TEXT_SUPERSAMPLE,
-        height / TEXT_SUPERSAMPLE,
-        FilterType::Lanczos3,
-    );
-    blend_rgba_image(pixmap, &scaled, rect.x.round() as i32, rect.y.round() as i32);
-}
-
 pub fn create_unavailable_pixmap(width: u32, height: u32) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(width, height)?;
     fill_background(&mut pixmap, COLOR_TRANSPARENT);
@@ -408,77 +365,44 @@ pub fn create_filled_pixmap(width: u32, height: u32, color: Rgba) -> Option<Pixm
     Some(pixmap)
 }
 
-fn mix_font() -> Option<&'static FontArc> {
-    static FONT: OnceLock<Option<FontArc>> = OnceLock::new();
-    const FONT_PATHS: &[&str] = &[
-        "/usr/share/fonts/TTF/Inter-Bold.ttf",
-        "/usr/share/fonts/truetype/inter/Inter-Bold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-    ];
-
-    FONT.get_or_init(|| {
-        for path in FONT_PATHS {
-            let Ok(bytes) = fs::read(path) else {
-                continue;
-            };
-            if let Ok(font) = FontArc::try_from_vec(bytes) {
-                return Some(font);
-            }
-        }
-        None
-    })
-    .as_ref()
+/// Source-over blit of an RGBA image onto `pixmap`.
+///
+/// Shared by the icon compositing in every renderer and by the text pipeline; previously each
+/// renderer carried its own copy of this loop.
+pub fn blit_rgba8(pixmap: &mut Pixmap, rgba: &RgbaImage, dest_x: i32, dest_y: i32) {
+    blit(pixmap, rgba, dest_x, dest_y, None);
 }
 
-fn text_pixel_bounds(font: &FontArc, scale: PxScale, text: &str) -> Option<(f32, f32, f32, f32)> {
-    let scaled = font.as_scaled(scale);
-    let mut pen_x = 0.0f32;
-    let mut last: Option<GlyphId> = None;
-    let mut min_x = f32::INFINITY;
-    let mut min_y = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut max_y = f32::NEG_INFINITY;
-
-    for c in text.chars() {
-        let glyph_id = scaled.glyph_id(c);
-        let glyph = glyph_id.with_scale_and_position(scale, point(pen_x, scaled.ascent()));
-        pen_x += scaled.h_advance(glyph_id);
-        if let Some(prev) = last {
-            pen_x += scaled.kern(glyph_id, prev);
-        }
-        last = Some(glyph_id);
-
-        if let Some(outlined) = scaled.outline_glyph(glyph) {
-            let bb = outlined.px_bounds();
-            min_x = min_x.min(bb.min.x);
-            min_y = min_y.min(bb.min.y);
-            max_x = max_x.max(bb.max.x);
-            max_y = max_y.max(bb.max.y);
-        }
+/// Source-over blit of `rgba`'s *coverage* tinted with `color`.
+///
+/// The source RGB is ignored and its alpha is scaled by `color.a`, so one rasterised mask can
+/// be drawn as a shadow, a halo and the glyphs themselves without re-rasterising.
+pub fn blit_alpha_tinted(pixmap: &mut Pixmap, rgba: &RgbaImage, dest_x: i32, dest_y: i32, color: Rgba) {
+    if color.a == 0 {
+        return;
     }
-
-    if min_x.is_finite() && min_y.is_finite() && max_x.is_finite() && max_y.is_finite() {
-        Some((min_x, min_y, max_x, max_y))
-    } else {
-        None
-    }
+    blit(pixmap, rgba, dest_x, dest_y, Some(color));
 }
 
-fn blend_rgba_image(pixmap: &mut Pixmap, rgba: &RgbaImage, dest_x: i32, dest_y: i32) {
+fn blit(pixmap: &mut Pixmap, rgba: &RgbaImage, dest_x: i32, dest_y: i32, tint: Option<Rgba>) {
+    let (pw, ph) = (pixmap.width() as i32, pixmap.height() as i32);
+    let tint_scale = tint.map_or(1.0, |c| c.a as f32 / 255.0);
+
     for (ix, iy, pixel) in rgba.enumerate_pixels() {
         let px = dest_x + ix as i32;
         let py = dest_y + iy as i32;
-        if px < 0 || py < 0 || px >= pixmap.width() as i32 || py >= pixmap.height() as i32 {
+        if px < 0 || py < 0 || px >= pw || py >= ph {
             continue;
         }
 
-        let src_a = pixel[3] as f32 / 255.0;
+        let src_a = (pixel[3] as f32 / 255.0) * tint_scale;
         if src_a <= 0.0 {
             continue;
         }
+        let (src_r, src_g, src_b) = match tint {
+            Some(c) => (c.r, c.g, c.b),
+            None => (pixel[0], pixel[1], pixel[2]),
+        };
 
         let idx = ((py as u32 * pixmap.width() + px as u32) * 4) as usize;
         let data = pixmap.data_mut();
@@ -496,9 +420,60 @@ fn blend_rgba_image(pixmap: &mut Pixmap, rgba: &RgbaImage, dest_x: i32, dest_y: 
             }
         };
 
-        data[idx] = blend(pixel[0], dst_r);
-        data[idx + 1] = blend(pixel[1], dst_g);
-        data[idx + 2] = blend(pixel[2], dst_b);
+        data[idx] = blend(src_r, dst_r);
+        data[idx + 1] = blend(src_g, dst_g);
+        data[idx + 2] = blend(src_b, dst_b);
         data[idx + 3] = (out_a * 255.0).round() as u8;
     }
+}
+
+/// A dark halo drawn from a coverage mask so white content survives a light or busy background.
+/// This is what replaces the opaque panel the strip used to paint.
+#[derive(Debug, Clone, Copy)]
+pub struct OutlineSpec {
+    /// Applied once per offset in [`HALO_DISC`]. Overlapping blits accumulate, so the halo is
+    /// dense against the glyph edge and falls off naturally outwards — a single thin ring is
+    /// not enough to separate white text from a white background.
+    pub halo: Rgba,
+    pub drop: Rgba,
+    pub drop_offset: (i32, i32),
+}
+
+/// Every integer offset inside a radius-2 disc, excluding the centre.
+const HALO_DISC: [(i32, i32); 12] = [
+    (0, -2),
+    (0, -1),
+    (0, 1),
+    (0, 2),
+    (-2, 0),
+    (-1, 0),
+    (1, 0),
+    (2, 0),
+    (-1, -1),
+    (1, -1),
+    (-1, 1),
+    (1, 1),
+];
+
+/// Draw `spec` around `mask`'s coverage. Call before blitting the content itself.
+pub fn blit_outline(pixmap: &mut Pixmap, mask: &RgbaImage, x: i32, y: i32, spec: &OutlineSpec) {
+    let (dx, dy) = spec.drop_offset;
+    blit_alpha_tinted(pixmap, mask, x + dx, y + dy, spec.drop);
+    for (dx, dy) in HALO_DISC {
+        blit_alpha_tinted(pixmap, mask, x + dx, y + dy, spec.halo);
+    }
+}
+
+/// Aspect-fit `png_data` into a `max_size` box, never upscaling. Returns the decoded RGBA and
+/// its scaled dimensions.
+pub fn decode_icon(png_data: &[u8], max_size: f32) -> Option<(RgbaImage, u32, u32)> {
+    let img = image::load_from_memory(png_data).ok()?;
+    let (iw, ih) = (img.width() as f32, img.height() as f32);
+    let scale = (max_size / iw).min(max_size / ih).min(1.0);
+    let (sw, sh) = ((iw * scale) as u32, (ih * scale) as u32);
+
+    let resized = img
+        .resize(sw, sh, image::imageops::FilterType::Triangle)
+        .to_rgba8();
+    Some((resized, sw, sh))
 }

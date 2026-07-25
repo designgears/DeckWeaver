@@ -5,97 +5,52 @@ use pipeweaver_profile::{
     VirtualSourceDevice, VirtualTargetDevice,
 };
 use pipeweaver_shared::{DeviceType as PipeweaverDeviceType, Mix, MuteTarget};
-use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[pyclass]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceType {
     Source,
     Target,
 }
 
-#[pymethods]
 impl DeviceType {
-    #[staticmethod]
-    fn source() -> Self {
+    pub fn source() -> Self {
         DeviceType::Source
     }
 
-    #[staticmethod]
-    fn target() -> Self {
+    pub fn target() -> Self {
         DeviceType::Target
     }
 
-    fn __repr__(&self) -> &'static str {
-        match self {
-            DeviceType::Source => "DeviceType.Source",
-            DeviceType::Target => "DeviceType.Target",
-        }
-    }
-
-    fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp) -> bool {
-        match op {
-            pyo3::basic::CompareOp::Eq => self == other,
-            pyo3::basic::CompareOp::Ne => self != other,
-            _ => false,
-        }
-    }
-
-    fn __hash__(&self) -> u64 {
-        match self {
-            DeviceType::Source => 0,
-            DeviceType::Target => 1,
-        }
-    }
-
-    fn is_source(&self) -> bool {
+    pub fn is_source(self) -> bool {
         matches!(self, DeviceType::Source)
     }
 
-    fn is_target(&self) -> bool {
+    pub fn is_target(self) -> bool {
         matches!(self, DeviceType::Target)
     }
 }
 
-#[pyclass]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
-    #[pyo3(get)]
-    pub id: String,
-    #[pyo3(get)]
-    pub name: String,
-    #[pyo3(get)]
-    pub device_type: DeviceType,
-    #[pyo3(get)]
-    pub is_physical: bool,
-    #[pyo3(get)]
-    pub volume: u8,
-    #[pyo3(get)]
-    pub is_muted: bool,
-    #[pyo3(get)]
-    pub color: Option<DeviceColor>,
-    #[pyo3(get)]
-    pub source_mix_a_volume: Option<u8>,
-    #[pyo3(get)]
-    pub source_mix_b_volume: Option<u8>,
-    #[pyo3(get)]
-    pub source_mix_a_muted: Option<bool>,
-    #[pyo3(get)]
-    pub source_mix_b_muted: Option<bool>,
-    #[pyo3(get)]
-    pub source_mute_a_all: Option<bool>,
-    #[pyo3(get)]
-    pub source_mute_b_all: Option<bool>,
-    #[pyo3(get)]
-    pub source_mute_a_target_count: Option<u8>,
-    #[pyo3(get)]
-    pub source_mute_b_target_count: Option<u8>,
-    #[pyo3(get)]
-    pub source_volumes_linked: Option<bool>,
-    #[pyo3(get)]
-    pub target_mix_b: Option<bool>,
+        pub id: String,
+        pub name: String,
+        pub device_type: DeviceType,
+        pub is_physical: bool,
+        pub volume: u8,
+        pub is_muted: bool,
+        pub color: Option<DeviceColor>,
+        pub source_mix_a_volume: Option<u8>,
+        pub source_mix_b_volume: Option<u8>,
+        pub source_mix_a_muted: Option<bool>,
+        pub source_mix_b_muted: Option<bool>,
+        pub source_mute_a_all: Option<bool>,
+        pub source_mute_b_all: Option<bool>,
+        pub source_mute_a_target_count: Option<u8>,
+        pub source_mute_b_target_count: Option<u8>,
+        pub source_volumes_linked: Option<bool>,
+        pub target_mix_b: Option<bool>,
 }
 
 impl Device {
@@ -128,64 +83,30 @@ impl Device {
     }
 }
 
-#[pymethods]
-impl Device {
-    fn __repr__(&self) -> String {
-        format!(
-            "Device(id={:?}, name={:?}, type={:?}, vol={}%, muted={})",
-            self.id, self.name, self.device_type, self.volume, self.is_muted
-        )
-    }
-}
-
-#[pyclass]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DeviceColor {
-    #[pyo3(get)]
     pub red: u8,
-    #[pyo3(get)]
     pub green: u8,
-    #[pyo3(get)]
     pub blue: u8,
 }
 
-#[pymethods]
 impl DeviceColor {
-    #[new]
-    fn new(red: u8, green: u8, blue: u8) -> Self {
+    pub fn new(red: u8, green: u8, blue: u8) -> Self {
         Self { red, green, blue }
     }
 
-    fn rgba(&self) -> (u8, u8, u8, u8) {
+    pub fn rgba(self) -> (u8, u8, u8, u8) {
         (self.red, self.green, self.blue, 255)
     }
-
-    fn __repr__(&self) -> String {
-        format!("DeviceColor({}, {}, {})", self.red, self.green, self.blue)
-    }
 }
 
-#[pyclass]
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HardwareDevice {
-    #[pyo3(get)]
-    pub node_id: Option<u32>,
-    #[pyo3(get)]
-    pub name: Option<String>,
-    #[pyo3(get)]
-    pub description: Option<String>,
-    #[pyo3(get)]
-    pub attachment_index: Option<usize>,
-}
-
-#[pymethods]
-impl HardwareDevice {
-    fn __repr__(&self) -> String {
-        format!(
-            "HardwareDevice(node_id={:?}, name={:?}, description={:?}, attachment_index={:?})",
-            self.node_id, self.name, self.description, self.attachment_index
-        )
-    }
+        pub node_id: Option<u32>,
+        pub name: Option<String>,
+        pub description: Option<String>,
+        pub attachment_index: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

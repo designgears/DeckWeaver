@@ -42,6 +42,8 @@
     
     "ui.volume_step.title": "Lautstärkeschritt",
     "ui.volume_step.subtitle": "Lautstärkeänderung pro Dial-Schritt (5-20%)",
+    "ui.show_volume.title": "Lautstärkeprozentsatz",
+    "ui.show_volume.subtitle": "Lautstärkeprozentsatz auf dem Encoder-Display anzeigen",
     
     "ui.refresh_devices.button": "Geräte Aktualisieren",
     
