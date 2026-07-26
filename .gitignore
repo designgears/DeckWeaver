@@ -131,7 +131,11 @@ dmypy.json
 
 # Rust build artifacts
 target/
-Cargo.lock
+
+# Cargo.lock is tracked on purpose. pipeweaver-ipc/-profile/-shared are unpinned git
+# dependencies, so without a lockfile every CI release silently builds against upstream HEAD.
+# That shipped a 0.7.0 whose Status schema did not match the daemon, and the plugin loaded zero
+# devices. Bumping pipeweaver is now a deliberate change to this file.
 
 # IDE and Editor files
 .vscode/
