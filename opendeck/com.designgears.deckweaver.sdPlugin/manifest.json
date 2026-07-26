@@ -2,7 +2,7 @@
   "Name": "DeckWeaver",
   "Description": "Control PipeWeaver virtual audio devices from your Stream Deck",
   "Author": "DesignGears",
-  "Version": "0.7.0",
+  "Version": "0.7.1",
   "CodePaths": {
     "x86_64-unknown-linux-gnu": "x86_64-unknown-linux-gnu/bin/deckweaver",
     "aarch64-unknown-linux-gnu": "aarch64-unknown-linux-gnu/bin/deckweaver"
