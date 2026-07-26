@@ -1,5 +1,5 @@
-//! Renders the Stream Deck+ encoder strip across a matrix of device states, composited over
-//! four backgrounds, into a single contact sheet at `target/preview/strip.png`.
+//! Renders the Stream Deck+ encoder strip and the slider keys across a matrix of device
+//! states, composited over four backgrounds, into contact sheets under `target/preview/`.
 //!
 //! The strip is drawn onto transparency so the user's own background shows through — the white
 //! and checkerboard columns are the ones that prove the text shadows and bar edges are doing
@@ -10,7 +10,8 @@
 //! ```
 
 use deckweaver_core::{
-    load_icon_to_png_bytes, KnobRenderer, RenderParams, ENCODER_STRIP_HEIGHT, ENCODER_STRIP_WIDTH,
+    load_icon_to_png_bytes, KnobRenderer, RenderParams, SliderRenderer, ENCODER_STRIP_HEIGHT,
+    ENCODER_STRIP_WIDTH, KEYPAD_SIZE,
 };
 use image::{Rgba, RgbaImage};
 
@@ -73,16 +74,90 @@ fn main() {
             .collect::<Vec<_>>()
             .join(", ")
     );
+
+    render_slider_sheet(dir);
 }
 
-/// Source-over composite of the rendered strip onto an opaque background.
-fn over(background: &mut RgbaImage, strip: &RgbaImage) {
-    for (x, y, src) in strip.enumerate_pixels() {
+/// Slider keys share the strip's visual language, so they get the same treatment: each state
+/// over each background. A slider spans two keys, so every cell shows the top and bottom halves
+/// stacked — they must line up into one continuous fader.
+fn render_slider_sheet(dir: &str) {
+    let size = KEYPAD_SIZE;
+    let renderer = SliderRenderer::new(size);
+    let backgrounds = backgrounds(size, size * 2);
+    let states = slider_states();
+
+    let sheet_w = backgrounds.len() as u32 * (size + GUTTER) + GUTTER;
+    let sheet_h = states.len() as u32 * (size * 2 + GUTTER) + GUTTER;
+    let mut sheet = RgbaImage::from_pixel(sheet_w, sheet_h, Rgba([24, 24, 27, 255]));
+
+    for (row, (label, params)) in states.iter().enumerate() {
+        for (col, (_, background)) in backgrounds.iter().enumerate() {
+            let mut cell = background.clone();
+            for (half, is_top) in [(0u32, true), (1, false)] {
+                let Some((rgba, w, h)) = renderer.render_internal_png(params, is_top, false) else {
+                    eprintln!("slider render failed for {label}");
+                    continue;
+                };
+                let key = RgbaImage::from_raw(w, h, rgba).expect("well-formed buffer");
+                over_at(&mut cell, &key, 0, half * size);
+            }
+            let x = GUTTER + col as u32 * (size + GUTTER);
+            let y = GUTTER + row as u32 * (size * 2 + GUTTER);
+            image::imageops::overlay(&mut sheet, &cell, x as i64, y as i64);
+        }
+    }
+
+    let out = format!("{dir}/slider.png");
+    sheet.save(&out).expect("write slider sheet");
+    println!("wrote {out}");
+    println!(
+        "  rows:    {}",
+        states
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
+fn slider_states() -> Vec<(&'static str, RenderParams)> {
+    let base = RenderParams {
+        meters_enabled: true,
+        is_source: true,
+        ..Default::default()
+    };
+
+    vec![
+        ("v65/m40", RenderParams { volume: 65, meter_value: 40, ..base.clone() }),
+        ("v100/m88", RenderParams { volume: 100, meter_value: 88, ..base.clone() }),
+        // Same two edge cases the strip has: a fill shorter than the bar is wide, and a level
+        // running well past the fader.
+        ("v5/m55", RenderParams { volume: 5, meter_value: 55, ..base.clone() }),
+        ("v0/m0", RenderParams { volume: 0, meter_value: 0, ..base.clone() }),
+        (
+            "target/clipping",
+            RenderParams { volume: 80, meter_value: 98, is_source: false, ..base },
+        ),
+    ]
+}
+
+/// Source-over composite of the rendered image onto an opaque background.
+fn over(background: &mut RgbaImage, top: &RgbaImage) {
+    over_at(background, top, 0, 0);
+}
+
+fn over_at(background: &mut RgbaImage, top: &RgbaImage, ox: u32, oy: u32) {
+    for (x, y, src) in top.enumerate_pixels() {
         let a = src[3] as f32 / 255.0;
         if a <= 0.0 {
             continue;
         }
-        let dst = background.get_pixel_mut(x, y);
+        let (dx, dy) = (x + ox, y + oy);
+        if dx >= background.width() || dy >= background.height() {
+            continue;
+        }
+        let dst = background.get_pixel_mut(dx, dy);
         for c in 0..3 {
             dst[c] = (src[c] as f32 * a + dst[c] as f32 * (1.0 - a)).round() as u8;
         }

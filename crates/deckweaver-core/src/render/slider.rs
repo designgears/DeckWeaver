@@ -1,10 +1,13 @@
-use super::common::*;
-use tiny_skia::Pixmap;
+//! Slider keys — the same capsule-and-recessed-meter language as the encoder strip, rotated
+//! upright and split across two keys.
+//!
+//! The bar is drawn once at double height, then the top or bottom square is cropped out, so a
+//! pair of stacked keys reads as one continuous fader. `orientation = "horizontal"` rotates the
+//! crop a quarter turn.
 
-const CORNER_INSET: f32 = 16.0;
-const BAR_WIDTH: f32 = 25.0;
-const BAR_OFFSET_Y: f32 = 0.0;
-const STROKE_WIDTH: f32 = 2.0;
+use super::common::*;
+use super::theme;
+use tiny_skia::Pixmap;
 
 pub struct SliderRenderer {
     button_size: u32,
@@ -32,23 +35,7 @@ impl SliderRenderer {
     }
 
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
-        let params = RenderParams {
-            name: String::new(),
-            volume: 0,
-            is_muted: false,
-            is_source: false,
-            meter_value: 0,
-            device_color: None,
-            volume_bar_color: None,
-            meter_color: None,
-            meter_invert: true,
-            meters_enabled: false,
-            mix_b_active: false,
-            source_volumes_linked: false,
-            mute_profile: 0,
-            mute_profile_muted: false,
-            show_volume: false,
-        };
+        let params = RenderParams::default();
         pixmap_to_rgba(&self.render_internal(&params, true, false)?)
     }
 
@@ -62,74 +49,95 @@ impl SliderRenderer {
         fill_background(&mut full, COLOR_TRANSPARENT);
 
         self.draw_slider_stack(&mut full, params);
-
-        if params.meters_enabled && params.meter_value > 0 {
-            self.render_meter_overlay(&mut full, params);
-        }
+        self.render_meter_overlay(&mut full, params);
 
         let square = self.extract_square(&full, is_top)?;
 
         if is_horizontal {
-            Some(self.rotate_cw(&square)?)
+            self.rotate_cw(&square)
         } else {
             Some(square)
         }
     }
 
-    fn draw_slider_stack(&self, pixmap: &mut Pixmap, params: &RenderParams) {
+    // -- layout -------------------------------------------------------------
+
+    /// The bar, in the coordinates of the double-height stack.
+    fn bar_bounds(&self) -> (f32, f32, f32, f32) {
         let size = self.button_size as f32;
-        let double_h = size * 2.0;
-        let slider_y = CORNER_INSET + BAR_OFFSET_Y;
-        let slider_h = double_h - CORNER_INSET * 2.0 - BAR_OFFSET_Y;
-        let slider_x = (size - BAR_WIDTH) / 2.0;
-
-        let fill_color = params.fill_color();
-        let fill_h = (params.volume as f32 / 100.0) * slider_h;
-        let bar = Rect::new(slider_x, slider_y, BAR_WIDTH, slider_h, 0.0);
-        bar.draw_filled(pixmap, gutter_color_for(fill_color));
-
-        if let Some(color) = fill_color {
-            if fill_h > 0.0 {
-                Rect::new(
-                    slider_x,
-                    slider_y + slider_h - fill_h,
-                    BAR_WIDTH,
-                    fill_h,
-                    0.0,
-                )
-                .draw_filled(pixmap, color);
-            }
-        }
-
-        bar.draw_stroked(pixmap, COLOR_BLACK, STROKE_WIDTH);
+        let width = size * theme::SLIDER_BAR_WIDTH_RATIO;
+        let inset = size * theme::SLIDER_END_INSET_RATIO;
+        (
+            (size - width) * 0.5,
+            inset,
+            width,
+            (size * 2.0 - inset * 2.0).max(0.0),
+        )
     }
 
-    fn render_meter_overlay(&self, full: &mut Pixmap, params: &RenderParams) {
-        let size = self.button_size as f32;
-        let double_h = size * 2.0;
-        let slider_y = CORNER_INSET + BAR_OFFSET_Y;
-        let slider_h = double_h - CORNER_INSET * 2.0 - BAR_OFFSET_Y;
-        let slider_x = (size - BAR_WIDTH) / 2.0;
-        let inset = STROKE_WIDTH * 0.5;
-        let inner_x = slider_x + inset;
-        let inner_w = (BAR_WIDTH - inset * 2.0).max(0.0);
+    /// The meter lane, recessed into the bar and horizontally centred in it.
+    fn meter_bounds(&self) -> (f32, f32, f32, f32) {
+        let (bar_x, bar_y, bar_w, bar_h) = self.bar_bounds();
+        let lane_w = bar_w * theme::SLIDER_METER_WIDTH_RATIO;
+        let inset = bar_w * theme::SLIDER_METER_INSET_RATIO;
+        (
+            bar_x + (bar_w - lane_w) * 0.5,
+            bar_y + inset,
+            lane_w,
+            (bar_h - inset * 2.0).max(0.0),
+        )
+    }
 
-        let fill_color = params.fill_color();
-        let fill_h = (params.volume as f32 / 100.0) * slider_h;
+    // -- drawing ------------------------------------------------------------
 
-        if params.meter_value > 0 && fill_h > 0.0 {
-            if let Some(fc) = fill_color {
-                let fill_y = slider_y + slider_h - fill_h;
-                let available = (fill_h - inset * 2.0).max(0.0);
-                if available > 0.0 {
-                    let meter_h = (params.meter_value as f32 / 100.0) * available;
-                    let meter_y = fill_y + inset + available - meter_h;
-                    let meter_color = meter_overlay_color(fc);
-                    Rect::new(inner_x, meter_y, inner_w, meter_h, 0.0)
-                        .draw_filled(full, meter_color);
-                }
-            }
+    fn draw_slider_stack(&self, pixmap: &mut Pixmap, params: &RenderParams) {
+        let (x, y, w, h) = self.bar_bounds();
+        let radius = w * 0.5;
+        let track = Rect::new(x, y, w, h, radius);
+
+        track.draw_filled(pixmap, theme::BAR_TRACK);
+
+        let fill_h = (params.volume as f32 / 100.0) * h;
+        if fill_h > 0.0 {
+            // Clipped to the track: a fill shorter than the bar is wide would otherwise get a
+            // radius clamped to its own half-height and poke out of the rounded end.
+            let clip = track.clip_mask(pixmap.width(), pixmap.height());
+            Rect::new(x, y + h - fill_h, w, fill_h, radius).draw_filled_clipped(
+                pixmap,
+                params.accent_color(),
+                clip.as_ref(),
+            );
         }
+
+        track.draw_inset_stroke(pixmap, theme::BAR_EDGE, theme::BAR_EDGE_WIDTH);
+    }
+
+    /// The meter lane, growing from the bottom like the fill.
+    fn render_meter_overlay(&self, pixmap: &mut Pixmap, params: &RenderParams) {
+        if !params.meters_enabled || params.meter_value == 0 {
+            return;
+        }
+
+        let (x, y, w, h) = self.meter_bounds();
+        let fill_h = (params.meter_value as f32 / 100.0) * h;
+        if fill_h <= 0.0 {
+            return;
+        }
+
+        // Ring first, then the lane on top, so the meter stays legible where it crosses from
+        // the accent fill onto the darker track above it.
+        let edge = theme::METER_EDGE_WIDTH;
+        let ring_w = w + edge * 2.0;
+        Rect::new(
+            x - edge,
+            y + h - fill_h - edge,
+            ring_w,
+            fill_h + edge * 2.0,
+            ring_w * 0.5,
+        )
+        .draw_filled(pixmap, theme::METER_EDGE);
+        Rect::new(x, y + h - fill_h, w, fill_h, w * 0.5)
+            .draw_filled(pixmap, params.meter_fill_color());
     }
 
     fn rotate_cw(&self, pixmap: &Pixmap) -> Option<Pixmap> {

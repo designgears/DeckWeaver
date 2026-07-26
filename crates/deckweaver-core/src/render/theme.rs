@@ -1,6 +1,6 @@
-//! Visual tokens for the Stream Deck+ encoder strip.
+//! Visual tokens shared by the encoder strip and the slider keys.
 //!
-//! The strip renders onto a fully transparent pixmap so the background the user configured in
+//! Both render onto a fully transparent pixmap so the background the user configured in
 //! OpenDeck / StreamController shows through. Nothing here may paint full-bleed; legibility on
 //! an arbitrary background comes from the shadow/halo tokens and the hairline bar edges.
 
@@ -51,6 +51,22 @@ pub const CLIP_THRESHOLD: u8 = 90;
 
 /// Alpha applied to the volume fill while the channel is muted.
 pub const MUTED_FILL_ALPHA: u8 = 105;
+
+// ---------------------------------------------------------------------------
+// Slider keys
+//
+// Expressed as ratios of the key size, not absolute pixels: a slider can land on a 144px
+// keypad key or a 72px encoder slot, and the old absolute widths made the bar a third of the
+// key on the small one and a sixth on the large one.
+// ---------------------------------------------------------------------------
+
+pub const SLIDER_BAR_WIDTH_RATIO: f32 = 0.18;
+/// Inset at each end of the two-key stack.
+pub const SLIDER_END_INSET_RATIO: f32 = 0.11;
+/// Meter lane width, as a fraction of the bar width.
+pub const SLIDER_METER_WIDTH_RATIO: f32 = 0.34;
+/// How far the meter lane stops short of each end of the bar, as a fraction of the bar width.
+pub const SLIDER_METER_INSET_RATIO: f32 = 0.28;
 
 // ---------------------------------------------------------------------------
 // Layout — tuned for the 200x100 encoder zone

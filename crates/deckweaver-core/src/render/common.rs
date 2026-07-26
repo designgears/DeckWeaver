@@ -1,3 +1,4 @@
+use super::theme;
 use image::RgbaImage;
 use tiny_skia::{Color, FillRule, Mask, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
@@ -41,17 +42,6 @@ impl Rgba {
         Self { a, ..self }
     }
 
-    pub fn luminance(self) -> f32 {
-        fn normalize(val: u8) -> f32 {
-            let v = val as f32 / 255.0;
-            if v <= 0.03928 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
-            }
-        }
-        0.2126 * normalize(self.r) + 0.7152 * normalize(self.g) + 0.0722 * normalize(self.b)
-    }
 }
 
 impl From<(u8, u8, u8)> for Rgba {
@@ -66,55 +56,13 @@ impl From<(u8, u8, u8, u8)> for Rgba {
     }
 }
 
-pub fn wcag_contrast_ratio(a: f32, b: f32) -> f32 {
-    let lighter = a.max(b);
-    let darker = a.min(b);
-    (lighter + 0.05) / (darker + 0.05)
-}
-
-const MIN_METER_CONTRAST: f32 = 3.0;
-const MAX_METER_BLEND: f32 = 0.65;
-
-pub fn meter_overlay_color(fill: Rgba) -> Rgba {
-    let fill_lum = fill.luminance();
-
-    // Fill luminance > 0.30 means even pure white can't achieve 3:1 — blend toward black.
-    // Otherwise blend toward white (dark fills).
-    let (target, _target_lum) = if fill_lum > 0.30 {
-        (COLOR_BLACK, 0.0)
-    } else {
-        (COLOR_WHITE, 1.0)
-    };
-
-    let mut lo = 0.0;
-    let mut hi = 1.0;
-
-    for _ in 0..10 {
-        let mid = (lo + hi) / 2.0;
-        let candidate = fill.blend(target, mid);
-        let ratio = wcag_contrast_ratio(fill_lum, candidate.luminance());
-
-        if ratio >= MIN_METER_CONTRAST {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-
-    fill.blend(target, hi.min(MAX_METER_BLEND))
-}
-
 pub const COLOR_TRANSPARENT: Rgba = Rgba::new(0, 0, 0, 0);
-pub const COLOR_BLACK: Rgba = Rgba::rgb(0, 0, 0);
 pub const COLOR_WHITE: Rgba = Rgba::rgb(255, 255, 255);
 pub const COLOR_RED: Rgba = Rgba::rgb(255, 0, 0);
 /// Fallback accents when PipeWeaver reports no device colour and the user set no override.
 /// Also used by the slider renderer.
 pub const COLOR_SOURCE_FILL: Rgba = Rgba::rgb(90, 169, 245);
 pub const COLOR_TARGET_FILL: Rgba = Rgba::rgb(79, 208, 138);
-pub const COLOR_GUTTER_DARK: Rgba = Rgba::rgb(120, 120, 120);
-pub const COLOR_GUTTER_LIGHT: Rgba = Rgba::rgb(220, 220, 220);
-const GUTTER_LUMINANCE_THRESHOLD: f32 = 0.1;
 
 #[derive(Debug, Clone, Default)]
 pub struct RenderParams {
@@ -150,18 +98,28 @@ impl RenderParams {
             })
     }
 
-    pub fn fill_color(&self) -> Option<Rgba> {
-        if self.volume == 0 {
-            return None;
-        }
-        Some(self.accent_color())
-    }
-}
+    /// Meter lane colour: the configured `meter_color` if the user picked one, otherwise
+    /// near-white, which stays legible against both the accent fill and the darker track the
+    /// lane crosses. `meter_invert` flips it — that is what makes StreamController's
+    /// black-plus-invert default come out white. Blends toward [`theme::CLIP`] near full scale.
+    pub fn meter_fill_color(&self) -> Rgba {
+        let mut color = self
+            .meter_color
+            .map(Rgba::from)
+            .filter(|c| c.a > 0)
+            .unwrap_or(theme::METER_DEFAULT);
 
-pub fn gutter_color_for(fill_color: Option<Rgba>) -> Rgba {
-    match fill_color {
-        Some(c) if c.luminance() < GUTTER_LUMINANCE_THRESHOLD => COLOR_GUTTER_LIGHT,
-        _ => COLOR_GUTTER_DARK,
+        if self.meter_invert {
+            color = color.invert();
+        }
+
+        if self.meter_value > theme::CLIP_THRESHOLD {
+            let over = (self.meter_value - theme::CLIP_THRESHOLD) as f32
+                / (100 - theme::CLIP_THRESHOLD) as f32;
+            color = color.blend(theme::CLIP, over.min(1.0));
+        }
+
+        color
     }
 }
 

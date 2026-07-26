@@ -114,7 +114,7 @@ impl KnobRenderer {
         let ring_h = h + edge * 2.0;
         Rect::new(x - edge, y - edge, fill_w + edge * 2.0, ring_h, ring_h * 0.5)
             .draw_filled(pixmap, theme::METER_EDGE);
-        Rect::new(x, y, fill_w, h, h * 0.5).draw_filled(pixmap, self.meter_color(params));
+        Rect::new(x, y, fill_w, h, h * 0.5).draw_filled(pixmap, params.meter_fill_color());
     }
 
     // -- layout helpers -----------------------------------------------------
@@ -270,29 +270,5 @@ impl KnobRenderer {
                 theme::TEXT_SECONDARY,
             );
         }
-    }
-
-    /// Meter lane colour: the configured `meter_color` if the user picked one, otherwise
-    /// near-white, which stays legible against both the accent fill and the darker track it
-    /// crosses. `meter_invert` flips it — that is what makes StreamController's
-    /// black-plus-invert default come out white.
-    fn meter_color(&self, params: &RenderParams) -> Rgba {
-        let mut color = params
-            .meter_color
-            .map(Rgba::from)
-            .filter(|c| c.a > 0)
-            .unwrap_or(theme::METER_DEFAULT);
-
-        if params.meter_invert {
-            color = color.invert();
-        }
-
-        if params.meter_value > theme::CLIP_THRESHOLD {
-            let over = (params.meter_value - theme::CLIP_THRESHOLD) as f32
-                / (100 - theme::CLIP_THRESHOLD) as f32;
-            color = color.blend(theme::CLIP, over.min(1.0));
-        }
-
-        color
     }
 }
