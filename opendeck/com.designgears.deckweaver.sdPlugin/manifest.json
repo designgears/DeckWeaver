@@ -22,7 +22,14 @@
       "SupportedInMultiActions": false,
       "Tooltip": "Control PipeWeaver volume with a dial",
       "UUID": "com.designgears.deckweaver.knob",
-      "PropertyInspectorPath": "propertyInspector/action.html"
+      "PropertyInspectorPath": "propertyInspector/action.html",
+      "Encoder": {
+        "layout": "layouts/deckweaver.json",
+        "TriggerDescription": {
+          "Rotate": "Change Volume",
+          "Push": "Mute"
+        }
+      }
     },
     {
       "Icon": "icons/button",
