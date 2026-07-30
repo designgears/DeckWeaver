@@ -1,17 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use deckweaver_core::{
-    action_dimensions, populate_common_fields, ActionConfig, ActionType, ControllerKind,
-    DeckWeaverCore, DeviceType as CoreDeviceType,
+    ActionConfig, ActionType, ControllerKind, DeckWeaverCore, DeviceType as CoreDeviceType,
+    action_dimensions, populate_common_fields,
 };
 use image::codecs::png::PngEncoder;
 use image::{ColorType, ImageEncoder, RgbaImage};
 use once_cell::sync::OnceCell;
-use openaction::{get_instance, Instance};
+use openaction::{Instance, get_instance};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// Knob actions render the full dial UI in the image; title overlay would clash with it.
 const KNOB_ACTION_UUID: &str = "com.designgears.deckweaver.knob";
@@ -52,24 +53,27 @@ fn spawn_update_loop(core: Arc<Mutex<DeckWeaverCore>>) {
                     continue;
                 };
 
-                if let (Some(bytes), Some(width), Some(height)) =
-                    (update.image, update.width, update.height)
+                if let Some(bytes) = update.image
+                    && let Some(width) = update.width
+                    && let Some(height) = update.height
+                    && let Some(data_uri) = rgba_to_data_uri(&bytes, width, height)
                 {
-                    if let Some(data_uri) = rgba_to_data_uri(&bytes, width, height) {
+                    // We're drawing, so what are we drawing to?
+                    if controller_kind(&instance) == ControllerKind::Encoder {
+                        // We're drawing to an encoder, send the image to the layout
+                        let feedback = json!({"img": data_uri});
+                        let _ = instance.set_feedback(&feedback).await;
+                    } else {
+                        // We're drawing to a button
                         let _ = instance.set_image(Some(data_uri), None).await;
                     }
                 }
 
-                // StreamController shows the device name below the dial (set_top_label).
-                // OpenDeck draws set_title on top of the LCD image, which breaks knob layout.
-                if instance.action_uuid != KNOB_ACTION_UUID {
-                    if let Some(label) = update.label {
-                        if controller_kind(&instance) == ControllerKind::Encoder {
-                            let _ = instance
-                                .set_title(Some(label.chars().take(25).collect::<String>()), None)
-                                .await;
-                        }
-                    }
+                // If the label needs updating, do it now
+                if let Some(label) = update.label {
+                    let _ = instance
+                        .set_title(Some(label.chars().take(25).collect::<String>()), None)
+                        .await;
                 }
             }
         }
@@ -235,7 +239,9 @@ pub fn update_instance(instance: &Instance, action_type: ActionType, settings: &
     let (width, height) = dimensions_for_instance(instance, action_type);
     let action_id = instance.instance_id.to_string();
     let config = build_config(action_id, action_type, settings, width, height);
-    core().lock().update_action(&instance.instance_id.to_string(), config);
+    core()
+        .lock()
+        .update_action(&instance.instance_id.to_string(), config);
 }
 
 pub async fn send_devices(instance: &Instance) -> openaction::OpenActionResult<()> {

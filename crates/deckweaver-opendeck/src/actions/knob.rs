@@ -3,7 +3,8 @@ use openaction::*;
 
 use crate::knob_touch::{handle_touch_press, toggle_active_profile_mute};
 use crate::shared::{
-    dimensions_for_instance, register_instance, unregister_instance, update_instance, ActionSettings,
+    dimensions_for_instance, register_instance, unregister_instance, update_instance,
+    ActionSettings,
 };
 use deckweaver_core::ActionType;
 
@@ -46,32 +47,6 @@ impl Action for KnobAction {
         Ok(())
     }
 
-    async fn key_down(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        info!(
-            "DeckWeaver knob key_down on {} (device_id={:?})",
-            instance.instance_id,
-            settings.device_id
-        );
-        if settings.device_id.is_none() {
-            return Ok(());
-        }
-        handle_touch_press(instance, settings.clone()).await;
-        Ok(())
-    }
-
-    async fn key_up(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let _ = (instance, settings);
-        Ok(())
-    }
-
     async fn dial_rotate(
         &self,
         _instance: &Instance,
@@ -94,13 +69,10 @@ impl Action for KnobAction {
             core.set_volume_relative(
                 device_id,
                 delta as i8,
-                settings
-                    .device_type
-                    .as_deref()
-                    .map(|t| match t {
-                        "source" => deckweaver_core::DeviceType::Source,
-                        _ => deckweaver_core::DeviceType::Target,
-                    }),
+                settings.device_type.as_deref().map(|t| match t {
+                    "source" => deckweaver_core::DeviceType::Source,
+                    _ => deckweaver_core::DeviceType::Target,
+                }),
             );
         }
         Ok(())
@@ -115,6 +87,24 @@ impl Action for KnobAction {
             return Ok(());
         }
         toggle_active_profile_mute(instance, settings.clone()).await
+    }
+
+    async fn touch_tap(
+        &self,
+        instance: &Instance,
+        settings: &Self::Settings,
+        _position: (u16, u16),
+        _hold: bool,
+    ) -> OpenActionResult<()> {
+        info!(
+            "DeckWeaver touch-strip touched on {} (device_id={:?})",
+            instance.instance_id, settings.device_id
+        );
+        if settings.device_id.is_none() {
+            return Ok(());
+        }
+        handle_touch_press(instance, settings.clone()).await;
+        Ok(())
     }
 
     async fn send_to_plugin(
