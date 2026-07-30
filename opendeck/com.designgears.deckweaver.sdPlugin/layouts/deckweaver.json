@@ -3,7 +3,7 @@
   "id": "custom-layout-2",
   "items": [
     {
-      "key": "my-image",
+      "key": "img",
       "type": "pixmap",
       "rect": [
         0,
