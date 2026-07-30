@@ -90,34 +90,6 @@ The Python extension uses PyO3's abi3 stable ABI and works on **any Python 3.11+
 3. Restart OpenDeck / reload plugins
 4. Add a DeckWeaver action and configure it in the property inspector
 
-#### Encoder LCD strip (Stream Deck+ dials)
-
-Upstream OpenDeck currently renders all encoder plugin images as a centered **72×72** icon on each **200×100** LCD zone, and the UI composes them on a square canvas first. That squashes knob layouts designed for the full strip (including DeckWeaver and pipewire-audio).
-
-DeckWeaver ships a patch for [OpenDeck](https://github.com/nekename/OpenDeck) that:
-
-- Uses a **200×100** canvas for encoder slots in the UI (so plugin images are not forced square)
-- Writes **200×100** images to the full encoder zone on hardware (legacy square images still use the 72×72 icon path)
-
-Apply it to an OpenDeck source checkout, then rebuild OpenDeck:
-
-```bash
-git clone https://github.com/nekename/OpenDeck.git
-cd OpenDeck
-git apply /path/to/DeckWeaver/patches/opendeck-encoder-full-strip.patch
-npm install
-npm run tauri build -- --no-bundle
-# binary: src-tauri/target/release/opendeck
-```
-
-Or use the helper script:
-
-```bash
-./scripts/apply-opendeck-patch.sh /path/to/OpenDeck
-```
-
-Until this lands upstream (or you run a patched build), encoder knobs will look like small square icons instead of full strips.
-
 ## Usage
 
 ### Basic Controls
