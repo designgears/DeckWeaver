@@ -119,6 +119,10 @@ if [ "$BUILD_OD" = true ]; then
   cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/button.png" 2>/dev/null || true
   cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/slider.png" 2>/dev/null || true
 
+  cd "opendeck"
+  zip -r ${SCRIPT_DIR}/deckweaver.streamDeckPlugin *
+  cd ${SCRIPT_DIR}
+
   echo "OpenDeck plugin bundle: $OD_PLUGIN_ROOT"
   echo "OpenDeck binary: $OD_BIN_DIR/deckweaver"
 fi

@@ -8,7 +8,7 @@ members = [
 
 [workspace.package]
 version = "0.7.1"
-edition = "2021"
+edition = "2024"
 authors = ["DesignGears"]
 license = "GPL-2.0-only"
 repository = "https://github.com/designgears/DeckWeaver"

@@ -22,13 +22,20 @@
       "SupportedInMultiActions": false,
       "Tooltip": "Control PipeWeaver volume with a dial",
       "UUID": "com.designgears.deckweaver.knob",
-      "PropertyInspectorPath": "propertyInspector/action.html"
+      "PropertyInspectorPath": "propertyInspector/action.html",
+      "Encoder": {
+        "layout": "layouts/deckweaver.json",
+        "TriggerDescription": {
+          "Rotate": "Change Volume",
+          "Push": "Mute"
+        }
+      }
     },
     {
       "Icon": "icons/button",
       "Name": "PipeWeaver Volume",
       "States": [{ "Image": "actionDefaultImage" }],
-      "Controllers": ["Keypad", "Encoder"],
+      "Controllers": ["Keypad"],
       "SupportedInMultiActions": true,
       "Tooltip": "Volume up, down, or mute on press",
       "UUID": "com.designgears.deckweaver.button",
@@ -38,7 +45,7 @@
       "Icon": "icons/button",
       "Name": "PipeWeaver Output Switch",
       "States": [{ "Image": "actionDefaultImage" }],
-      "Controllers": ["Keypad", "Encoder"],
+      "Controllers": ["Keypad"],
       "SupportedInMultiActions": true,
       "Tooltip": "Switch hardware output routing",
       "UUID": "com.designgears.deckweaver.sourceswitch",
@@ -48,7 +55,7 @@
       "Icon": "icons/button",
       "Name": "PipeWeaver Input Switch",
       "States": [{ "Image": "actionDefaultImage" }],
-      "Controllers": ["Keypad", "Encoder"],
+      "Controllers": ["Keypad"],
       "SupportedInMultiActions": true,
       "Tooltip": "Switch hardware input routing",
       "UUID": "com.designgears.deckweaver.physicalsourceswitch",
@@ -58,7 +65,7 @@
       "Icon": "icons/slider",
       "Name": "PipeWeaver Slider",
       "States": [{ "Image": "actionDefaultImage" }],
-      "Controllers": ["Keypad", "Encoder"],
+      "Controllers": ["Keypad"],
       "SupportedInMultiActions": true,
       "Tooltip": "Control a virtual slider half",
       "UUID": "com.designgears.deckweaver.slider",
