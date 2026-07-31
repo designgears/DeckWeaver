@@ -9,14 +9,14 @@
   },
   "CodePathLin": "x86_64-unknown-linux-gnu/bin/deckweaver",
   "Icon": "icons/plugin",
-  "Category": "PipeWeaver",
+  "Category": "DeckWeaver",
   "OS": [
     { "Platform": "linux" }
   ],
   "Actions": [
     {
       "Icon": "icons/knob",
-      "Name": "PipeWeaver Knob",
+      "Name": "DeckWeaver Knob",
       "States": [{ "Image": "actionDefaultImage", "ShowTitle": false }],
       "Controllers": ["Encoder"],
       "SupportedInMultiActions": false,
@@ -33,7 +33,7 @@
     },
     {
       "Icon": "icons/button",
-      "Name": "PipeWeaver Volume",
+      "Name": "DeckWeaver Volume",
       "States": [{ "Image": "actionDefaultImage" }],
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": true,
@@ -43,7 +43,7 @@
     },
     {
       "Icon": "icons/button",
-      "Name": "PipeWeaver Output Switch",
+      "Name": "DeckWeaver Output Switch",
       "States": [{ "Image": "actionDefaultImage" }],
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": true,
@@ -53,7 +53,7 @@
     },
     {
       "Icon": "icons/button",
-      "Name": "PipeWeaver Input Switch",
+      "Name": "DeckWeaver Input Switch",
       "States": [{ "Image": "actionDefaultImage" }],
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": true,
@@ -63,7 +63,7 @@
     },
     {
       "Icon": "icons/slider",
-      "Name": "PipeWeaver Slider",
+      "Name": "DeckWeaver Slider",
       "States": [{ "Image": "actionDefaultImage" }],
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": true,

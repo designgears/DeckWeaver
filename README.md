@@ -47,23 +47,26 @@ The project is a Cargo workspace with a shared core and two host targets:
 # Build both targets (default)
 ./build.sh release
 
-# StreamController only
+# StreamController only (--sc and -sc also work)
 ./build.sh release --streamcontroller
 
-# OpenDeck only
+# OpenDeck only (--od and -od also work)
 ./build.sh release --opendeck
 
-# Install StreamController plugin
+# Build and install both
 ./build.sh release --install
 
-# Install OpenDeck plugin bundle
-./build.sh release --opendeck --install-opendeck
+# Install OpenDeck plugin bundle only
+./build.sh release --opendeck --install
 ```
+
+`--install`/`-i` installs whichever targets the build selected, so pair it with
+`--streamcontroller` or `--opendeck` to install just one.
 
 The Python extension uses PyO3's abi3 stable ABI and works on **any Python 3.11+**.
 
 - **StreamController:** `./build.sh release` or `pip install .` (maturin)
-- **OpenDeck:** copy or symlink `opendeck/com.designgears.deckweaver.sdPlugin` into your OpenDeck plugins directory, or use `--install-opendeck`
+- **OpenDeck:** copy or symlink `opendeck/com.designgears.deckweaver.sdPlugin` into your OpenDeck plugins directory, or use `--opendeck --install`
 
 **Version:** Set once in the workspace `Cargo.toml` (`[workspace.package] version`). The build script syncs it to `pyproject.toml`, `manifest.json`, and the OpenDeck manifest.
 
@@ -85,7 +88,7 @@ The Python extension uses PyO3's abi3 stable ABI and works on **any Python 3.11+
 
 ### OpenDeck
 
-1. Run `./build.sh release --opendeck` (or `--install-opendeck`)
+1. Run `./build.sh release --opendeck` (add `--install` to deploy it automatically)
 2. Place `opendeck/com.designgears.deckweaver.sdPlugin` in your OpenDeck plugins folder
 3. Restart OpenDeck / reload plugins
 4. Add a DeckWeaver action and configure it in the property inspector

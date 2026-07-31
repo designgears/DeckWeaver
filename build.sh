@@ -1,13 +1,12 @@
 #!/bin/bash
 # Build DeckWeaver for StreamController (Python/PyO3) and OpenDeck (native binary)
 #
-# Usage: ./build.sh [clean|dev|release] [targets] [install flags]
-#   clean|dev|release - build profile (default: release)
-#   --streamcontroller, --sc  - build StreamController Python extension only
-#   --opendeck, --od          - build OpenDeck plugin binary only
-#   --all                     - build both targets (default)
-#   --install, -i             - install StreamController plugin after build
-#   --install-opendeck        - symlink/copy OpenDeck plugin into OpenDeck plugins dir
+# Usage: ./build.sh [clean|dev|release] [targets] [--install|-i]
+#   clean|dev|release              - build profile (default: release)
+#   --streamcontroller, --sc, -sc  - build StreamController Python extension only
+#   --opendeck, --od, -od          - build OpenDeck plugin binary only
+#   --all                          - build both targets (default)
+#   --install, -i                  - install whichever targets were built
 
 set -euo pipefail
 
@@ -32,24 +31,32 @@ sync_version
 PROFILE="release"
 BUILD_SC=true
 BUILD_OD=true
-INSTALL_SC=false
-INSTALL_OD=false
+INSTALL=false
 
 for arg in "$@"; do
   case "$arg" in
     clean|dev|release) PROFILE="$arg" ;;
-    --streamcontroller|--sc) BUILD_SC=true; BUILD_OD=false ;;
-    --opendeck|--od) BUILD_SC=false; BUILD_OD=true ;;
+    --streamcontroller|--sc|-sc) BUILD_SC=true; BUILD_OD=false ;;
+    --opendeck|--od|-od) BUILD_SC=false; BUILD_OD=true ;;
     --all) BUILD_SC=true; BUILD_OD=true ;;
-    --install|-i) INSTALL_SC=true ;;
-    --install-opendeck) INSTALL_OD=true ;;
+    --install|-i) INSTALL=true ;;
     *)
       echo "Error: Unknown option '$arg'"
-      echo "Usage: $0 [clean|dev|release] [--streamcontroller|--opendeck|--all] [--install|-i] [--install-opendeck]"
+      echo "Usage: $0 [clean|dev|release] [--streamcontroller|--sc|-sc] [--opendeck|--od|-od] [--all] [--install|-i]"
       exit 1
       ;;
   esac
 done
+
+# Install follows the build selection, so `-i` alone installs both and
+# `--od -i` installs only OpenDeck. Derived after parsing so flag order
+# doesn't matter.
+INSTALL_SC=false
+INSTALL_OD=false
+if [ "$INSTALL" = true ]; then
+  INSTALL_SC="$BUILD_SC"
+  INSTALL_OD="$BUILD_OD"
+fi
 
 if [ "$PROFILE" = "clean" ]; then
   echo "Cleaning build artifacts..."

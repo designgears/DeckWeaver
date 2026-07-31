@@ -16,8 +16,11 @@ OUT = (
     / "fontawesome-icons.json"
 )
 
+# The crate emits raw strings whose hash count has changed between releases
+# (r#"..."# in 7.2, r##"..."## in 7.3), so match the opening hashes and
+# backreference them for the terminator.
 ICON_BLOCK = re.compile(
-    r'svg: r#"(?P<svg>.*?)"#,\s*'
+    r'svg: r(?P<hashes>#+)"(?P<svg>.*?)"(?P=hashes),\s*'
     r'slug: "(?P<slug>[^"]+)",.*?'
     r'family: "(?P<family>[^"]+)",.*?'
     r'label: "(?P<label>[^"]+)"',
@@ -41,7 +44,9 @@ def fa_crate_root() -> Path:
 def collect_icon_data(crate_root: Path) -> dict[str, dict[str, str]]:
     icons: dict[str, dict[str, str]] = {}
     icons_dir = crate_root / "src/icons"
-    for part in sorted(icons_dir.glob("*/*.rs")):
+    # regular.rs sits at the top level while brands/ and solid/ are split into
+    # part_*.rs subdirectories, so recurse rather than globbing a fixed depth.
+    for part in sorted(icons_dir.rglob("*.rs")):
         text = part.read_text(encoding="utf-8")
         for block in ICON_BLOCK.finditer(text):
             family = block.group("family")
@@ -91,9 +96,19 @@ def main() -> int:
     if not icons:
         raise SystemExit("No Font Awesome icons found")
 
+    # An SVG-less manifest still renders a dropdown, just one with no icons in
+    # it, so fail loudly instead of shipping a silently broken picker.
+    missing = [icon["slug"] for icon in icons if not icon["svg"]]
+    if len(missing) > len(icons) // 10:
+        raise SystemExit(
+            f"{len(missing)}/{len(icons)} icons have no SVG "
+            f"(e.g. {', '.join(missing[:5])}); the crate layout or the "
+            f"Icon literal format in {crate_root} likely changed"
+        )
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(icons, separators=(",", ":")), encoding="utf-8")
-    print(f"Wrote {len(icons)} icons to {OUT}")
+    print(f"Wrote {len(icons)} icons to {OUT} ({len(missing)} without SVG)")
     return 0
 
 
