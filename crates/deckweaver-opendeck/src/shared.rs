@@ -61,16 +61,29 @@ fn spawn_update_loop(core: Arc<Mutex<DeckWeaverCore>>) {
                     // We're drawing, so what are we drawing to?
                     if controller_kind(&instance) == ControllerKind::Encoder {
                         // We're drawing to an encoder, send the image to the layout
-                        let feedback = json!({"img": data_uri});
+                        let feedback = json!({"img": data_uri.clone()});
                         let _ = instance.set_feedback(&feedback).await;
+
+                        // setFeedback only reaches the LCD strip: OpenDeck's UI draws encoder
+                        // slots with the same square-canvas path as keypad keys, off the state
+                        // image, and never reads the parsed layout. Without this the UI is stuck
+                        // on the manifest's actionDefaultImage while the hardware animates.
+                        // Harmless for the strip itself, since OpenDeck only falls back to these
+                        // bytes when an action has no encoder config in its manifest.
+                        let _ = instance.set_image(Some(data_uri), None).await;
                     } else {
                         // We're drawing to a button
                         let _ = instance.set_image(Some(data_uri), None).await;
                     }
                 }
 
-                // If the label needs updating, do it now
-                if let Some(label) = update.label {
+                // If the label needs updating, do it now. Knobs are excluded: the strip image
+                // already carries the device name and volume, and OpenDeck turns any non-empty
+                // state title into a title override for the layout renderer, so setting one
+                // here would draw the name a second time on top of the dial.
+                if instance.action_uuid != KNOB_ACTION_UUID
+                    && let Some(label) = update.label
+                {
                     let _ = instance
                         .set_title(Some(label.chars().take(25).collect::<String>()), None)
                         .await;
