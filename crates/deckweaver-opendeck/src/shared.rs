@@ -14,9 +14,6 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// Knob actions render the full dial UI in the image; title overlay would clash with it.
-const KNOB_ACTION_UUID: &str = "com.designgears.deckweaver.knob";
-
 static CORE: OnceCell<Arc<Mutex<DeckWeaverCore>>> = OnceCell::new();
 
 pub fn core() -> Arc<Mutex<DeckWeaverCore>> {
@@ -68,8 +65,10 @@ fn spawn_update_loop(core: Arc<Mutex<DeckWeaverCore>>) {
                         // slots with the same square-canvas path as keypad keys, off the state
                         // image, and never reads the parsed layout. Without this the UI is stuck
                         // on the manifest's actionDefaultImage while the hardware animates.
-                        // Harmless for the strip itself, since OpenDeck only falls back to these
-                        // bytes when an action has no encoder config in its manifest.
+                        // Harmless for the strip itself: OpenDeck only falls back to these bytes
+                        // when an action has no encoder config, and while it does feed a differing
+                        // state image to the renderer as an icon override, that override is
+                        // dropped unless the layout declares an "icon" pixmap item (ours doesn't).
                         let _ = instance.set_image(Some(data_uri), None).await;
                     } else {
                         // We're drawing to a button
@@ -77,13 +76,11 @@ fn spawn_update_loop(core: Arc<Mutex<DeckWeaverCore>>) {
                     }
                 }
 
-                // If the label needs updating, do it now. Knobs are excluded: the strip image
-                // already carries the device name and volume, and OpenDeck turns any non-empty
-                // state title into a title override for the layout renderer, so setting one
-                // here would draw the name a second time on top of the dial.
-                if instance.action_uuid != KNOB_ACTION_UUID
-                    && let Some(label) = update.label
-                {
+                // If the label needs updating, do it now. Safe to send unconditionally: a title
+                // only reaches the strip if the layout declares a "title" text item (ours is a
+                // lone pixmap), and only reaches the UI if the state sets ShowTitle (ours is
+                // false), so it never lands on top of the dial the knob renderer already drew.
+                if let Some(label) = update.label {
                     let _ = instance
                         .set_title(Some(label.chars().take(25).collect::<String>()), None)
                         .await;
