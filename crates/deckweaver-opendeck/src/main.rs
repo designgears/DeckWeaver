@@ -4,7 +4,8 @@ mod knob_touch;
 mod shared;
 
 use actions::{
-    ButtonAction, KnobAction, PhysicalSourceSwitchAction, SliderAction, SourceSwitchAction,
+    AppButtonAction, AppKnobAction, AppSliderAction, ButtonAction, KnobAction,
+    PhysicalSourceSwitchAction, SliderAction, SourceSwitchAction,
 };
 use openaction::*;
 
@@ -27,6 +28,9 @@ async fn main() -> OpenActionResult<()> {
     register_action(SourceSwitchAction).await;
     register_action(PhysicalSourceSwitchAction).await;
     register_action(SliderAction).await;
+    register_action(AppKnobAction).await;
+    register_action(AppButtonAction).await;
+    register_action(AppSliderAction).await;
 
     run(std::env::args().collect()).await
 }

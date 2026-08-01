@@ -24,7 +24,14 @@
     "actions.physical_source_switch_button.tooltip": "Switch the physical device attached to a hardware input source",
     "actions.slider.name": "PipeWeaver Slider",
     "actions.slider.tooltip": "Control PipeWeaver audio with slider",
-    
+
+    "actions.app_knob.name": "App Volume Knob",
+    "actions.app_knob.tooltip": "Control one application's volume with a knob/dial",
+    "actions.app_button.name": "App Volume",
+    "actions.app_button.tooltip": "Volume up, down, or mute one application with a button",
+    "actions.app_slider.name": "App Volume Slider",
+    "actions.app_slider.tooltip": "Control one application's volume with a slider",
+
     "ui.error.not_running.title": "PipeWeaver Not Running",
     "ui.error.not_running.subtitle": "Please start PipeWeaver daemon to configure this action",
     

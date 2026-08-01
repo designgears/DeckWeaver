@@ -84,6 +84,9 @@ pub struct RenderParams {
     pub mute_profile_muted: bool,
     /// Draw the volume percentage in the top right of the encoder strip.
     pub show_volume: bool,
+    /// Channel this app plays into. When set, the knob's bottom row shows it instead of the
+    /// PipeWeaver mute-profile / mix / link chips, none of which apply to an app stream.
+    pub routed_to: Option<String>,
 }
 
 impl RenderParams {

@@ -207,6 +207,8 @@ impl ActionConfig {
             mute_profile_muted: self.mute_profile_muted,
             mute_profile_data: self.mute_profile_data.clone(),
             show_volume: self.show_volume,
+            routed_to: None,
+            app_icon_path: None,
         }
     }
 }
@@ -297,6 +299,59 @@ impl DeviceColor {
 
     fn rgba(&self) -> (u8, u8, u8, u8) {
         (self.red, self.green, self.blue, 255)
+    }
+}
+
+/// An application currently playing audio, aggregated across all of its streams.
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct AppStream {
+    /// Device id to store on an action, e.g. "app:msedge".
+    #[pyo3(get)]
+    pub id: String,
+    /// Stable identity across restarts, normally the process binary.
+    #[pyo3(get)]
+    pub key: String,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub volume: u8,
+    #[pyo3(get)]
+    pub is_muted: bool,
+    /// `application.icon_name`, suitable for an XDG icon theme lookup.
+    #[pyo3(get)]
+    pub icon_name: Option<String>,
+    /// Channel this app plays into, e.g. the PipeWeaver target.
+    #[pyo3(get)]
+    pub routed_to: Option<String>,
+    /// Host pids behind this app's streams. Empty when the app is sandboxed and reported a pid
+    /// from its own namespace, which is discarded as unusable.
+    #[pyo3(get)]
+    pub pids: Vec<u32>,
+}
+
+#[pymethods]
+impl AppStream {
+    fn __repr__(&self) -> String {
+        format!(
+            "AppStream(id={:?}, name={:?}, volume={}, is_muted={})",
+            self.id, self.name, self.volume, self.is_muted
+        )
+    }
+}
+
+impl AppStream {
+    fn from_core(app: deckweaver_core::AppStream) -> Self {
+        Self {
+            id: app.device_id(),
+            key: app.key,
+            name: app.name,
+            volume: app.volume,
+            is_muted: app.is_muted,
+            icon_name: app.icon_name,
+            routed_to: app.routed_to,
+            pids: app.pids,
+        }
     }
 }
 
@@ -575,6 +630,57 @@ impl DeckWeaverCore {
             .toggle_mute(device_id, device_type.map(|dt| dt.into_core()))
     }
 
+    /// True once the sound server is reachable. Independent of `is_available`, which reports the
+    /// PipeWeaver connection: app actions work without PipeWeaver running.
+    fn is_pulse_available(&self) -> bool {
+        self.inner.is_pulse_available()
+    }
+
+    /// Applications currently playing audio, sorted by name.
+    fn get_apps(&self) -> Vec<AppStream> {
+        self.inner
+            .get_apps()
+            .into_iter()
+            .map(AppStream::from_core)
+            .collect()
+    }
+
+    /// Nudge an app's volume by `delta` percentage points. `device_id` is the `app:`-prefixed id;
+    /// returns False if it is not one.
+    fn set_app_volume_relative(&self, device_id: &str, delta: i16) -> bool {
+        self.inner.set_app_volume_relative(device_id, delta)
+    }
+
+    fn set_app_volume(&self, device_id: &str, volume: u8) -> bool {
+        self.inner.set_app_volume(device_id, volume)
+    }
+
+    fn set_app_mute(&self, device_id: &str, muted: bool) -> bool {
+        self.inner.set_app_mute(device_id, muted)
+    }
+
+    fn toggle_app_mute(&self, device_id: &str) -> bool {
+        self.inner.toggle_app_mute(device_id)
+    }
+
+    /// Whether a device id refers to an app stream rather than a PipeWeaver device.
+    #[staticmethod]
+    fn is_app_device(device_id: &str) -> bool {
+        CoreEngine::is_app_device(device_id)
+    }
+
+    /// True once focus tracking is live. False where no supported compositor was found, which is
+    /// how the config UI knows to hide the focus-following option.
+    fn is_focus_tracking_available(&self) -> bool {
+        self.inner.is_focus_tracking_available()
+    }
+
+    /// Name of the app a focus-following action would act on right now, or None when the focused
+    /// window's app is not playing anything.
+    fn focused_app_name(&self) -> Option<String> {
+        self.inner.focused_app_name()
+    }
+
     fn set_source_volume_relative(&self, device_id: &str, mix_b: bool, delta: i8) -> bool {
         self.inner
             .set_source_volume_relative(device_id, mix_b, delta)
@@ -689,6 +795,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DeckWeaverCore>()?;
     m.add_class::<ActionConfig>()?;
     m.add_class::<ActionType>()?;
+    m.add_class::<AppStream>()?;
     m.add_class::<Device>()?;
     m.add_class::<DeviceColor>()?;
     m.add_class::<DeviceType>()?;
@@ -700,5 +807,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_icon_to_png, m)?)?;
     m.add("VERSION", VERSION)?;
     m.add("DEFAULT_PORT", DEFAULT_PORT)?;
+    m.add("FOCUSED_DEVICE_ID", deckweaver_core::FOCUSED_DEVICE_ID)?;
     Ok(())
 }

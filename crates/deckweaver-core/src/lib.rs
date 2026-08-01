@@ -5,7 +5,9 @@ mod config;
 mod core;
 mod devices;
 mod dimensions;
+mod focus;
 mod icon_loader;
+mod pulse;
 mod render;
 
 pub use action::{ActionConfig, ActionState, ActionType, CachedBaseRender, CachedIcon};
@@ -16,5 +18,13 @@ pub use dimensions::{
     action_dimensions, ControllerKind, ENCODER_ICON_SIZE, ENCODER_STRIP_HEIGHT,
     ENCODER_STRIP_WIDTH, KEYPAD_SIZE,
 };
-pub use icon_loader::{load_icon_to_png_bytes, svg_data_to_png_bytes};
+pub use icon_loader::{
+    find_desktop_id_for_app, find_icon_by_name, find_icon_for_app, load_icon_to_png_bytes,
+    svg_data_to_png_bytes,
+};
+pub use focus::{detect_backend, is_same_or_descendant, Backend, FocusTracker, FocusedWindow};
+pub use pulse::{
+    app_key_from_device_id, is_focused_device_id, AppStream, PulseBackend, APP_DEVICE_PREFIX,
+    FOCUSED_APP_KEY, FOCUSED_DEVICE_ID,
+};
 pub use render::{ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer};

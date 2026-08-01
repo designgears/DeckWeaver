@@ -36,6 +36,11 @@ pub struct ActionConfig {
     pub mute_profile_data: Vec<bool>,
     /// Knob only: draw the volume percentage in the top right of the encoder strip.
     pub show_volume: bool,
+    /// Populated by the render loop for app actions, not by the host: the channel the app is
+    /// routed to, and the icon its own desktop entry advertises. They live here so the existing
+    /// per-frame config clone carries them, and so the render caches key off them.
+    pub routed_to: Option<String>,
+    pub app_icon_path: Option<String>,
 }
 
 impl ActionConfig {
@@ -62,6 +67,8 @@ impl ActionConfig {
             mute_profile_muted: false,
             mute_profile_data: vec![false, false],
             show_volume: true,
+            routed_to: None,
+            app_icon_path: None,
         }
     }
 }
@@ -130,6 +137,8 @@ impl ActionState {
             icon_png.hash(&mut hasher);
         }
         self.config.icon_path.hash(&mut hasher);
+        self.config.app_icon_path.hash(&mut hasher);
+        self.config.routed_to.hash(&mut hasher);
         if self.config.action_type == crate::action::ActionType::Slider {
             self.config.orientation.hash(&mut hasher);
             self.config.is_top.hash(&mut hasher);
@@ -236,6 +245,8 @@ impl ActionState {
         self.config.action_type.hash(&mut hasher);
         self.config.device_id.hash(&mut hasher);
         self.config.device_type.hash(&mut hasher);
+        self.config.routed_to.hash(&mut hasher);
+        self.config.app_icon_path.hash(&mut hasher);
         self.config.meters_enabled.hash(&mut hasher);
         self.config.orientation.hash(&mut hasher);
         self.config.is_top.hash(&mut hasher);

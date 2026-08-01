@@ -16,6 +16,9 @@ serde_json = { workspace = true }
 pipeweaver-ipc = { workspace = true }
 pipeweaver-profile = { workspace = true }
 pipeweaver-shared = { workspace = true }
+libpulse-binding = { workspace = true }
+zbus = { workspace = true }
+x11rb = { workspace = true }
 tiny-skia = { workspace = true }
 resvg = { workspace = true }
 image = { workspace = true }

@@ -70,6 +70,43 @@
       "Tooltip": "Control a virtual slider half",
       "UUID": "com.designgears.deckweaver.slider",
       "PropertyInspectorPath": "propertyInspector/slider.html"
+    },
+    {
+      "Icon": "icons/knob",
+      "Name": "App Volume Knob",
+      "States": [{ "Image": "actionDefaultImage", "ShowTitle": false }],
+      "Controllers": ["Encoder"],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Control one application's volume with a dial",
+      "UUID": "com.designgears.deckweaver.appknob",
+      "PropertyInspectorPath": "propertyInspector/appKnob.html",
+      "Encoder": {
+        "layout": "layouts/deckweaver.json",
+        "TriggerDescription": {
+          "Rotate": "Change Volume",
+          "Push": "Mute"
+        }
+      }
+    },
+    {
+      "Icon": "icons/button",
+      "Name": "App Volume",
+      "States": [{ "Image": "actionDefaultImage" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Volume up, down, or mute one application on press",
+      "UUID": "com.designgears.deckweaver.appbutton",
+      "PropertyInspectorPath": "propertyInspector/appButton.html"
+    },
+    {
+      "Icon": "icons/slider",
+      "Name": "App Volume Slider",
+      "States": [{ "Image": "actionDefaultImage" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Control one application's volume as a slider half",
+      "UUID": "com.designgears.deckweaver.appslider",
+      "PropertyInspectorPath": "propertyInspector/appSlider.html"
     }
   ]
 }

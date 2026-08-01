@@ -86,6 +86,11 @@ pub struct DeckWeaverCore {
     meter_data: Arc<RwLock<HashMap<String, u8>>>,
     command_tx: Arc<RwLock<Option<tokio::sync::mpsc::Sender<Command>>>>,
     pending_updates: Arc<RwLock<HashMap<String, PendingUpdate>>>,
+    /// Per-application volume, independent of PipeWeaver. App actions stay live whether or not
+    /// the websocket ever connects.
+    pulse: Arc<crate::pulse::PulseBackend>,
+    /// Which window has focus, for actions that follow it rather than a fixed app.
+    focus: Arc<crate::focus::FocusTracker>,
 }
 
 impl DeckWeaverCore {
@@ -98,6 +103,8 @@ impl DeckWeaverCore {
             meter_data: Arc::new(RwLock::new(HashMap::new())),
             command_tx: Arc::new(RwLock::new(None)),
             pending_updates: Arc::new(RwLock::new(HashMap::new())),
+            pulse: crate::pulse::PulseBackend::new(),
+            focus: crate::focus::FocusTracker::new(),
         }
     }
 
@@ -158,6 +165,72 @@ impl DeckWeaverCore {
 
     pub fn is_available(&self) -> bool {
         self.service_available.load(Ordering::Relaxed)
+    }
+
+    /// True once the sound server is reachable. Independent of [`Self::is_available`]: the app
+    /// actions work with PipeWeaver stopped, and the PipeWeaver actions work with no sound server
+    /// bound.
+    pub fn is_pulse_available(&self) -> bool {
+        self.pulse.is_available()
+    }
+
+    /// Applications currently playing audio, for the property inspector's picker.
+    pub fn get_apps(&self) -> Vec<crate::pulse::AppStream> {
+        self.pulse.apps()
+    }
+
+    /// Nudge an app's volume by `delta` percentage points. `device_id` is the `app:`-prefixed id
+    /// stored on the action; a PipeWeaver id is ignored.
+    ///
+    /// The focus sentinel is resolved here rather than when the action was configured, so a press
+    /// acts on whatever holds focus at that instant.
+    pub fn set_app_volume_relative(&self, device_id: &str, delta: i16) -> bool {
+        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
+            return false;
+        };
+        self.pulse.adjust_volume(&key, delta);
+        true
+    }
+
+    /// Set an app's volume to an absolute 0-100.
+    pub fn set_app_volume(&self, device_id: &str, volume: u8) -> bool {
+        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
+            return false;
+        };
+        self.pulse.set_volume(&key, volume);
+        true
+    }
+
+    pub fn set_app_mute(&self, device_id: &str, muted: bool) -> bool {
+        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
+            return false;
+        };
+        self.pulse.set_mute(&key, muted);
+        true
+    }
+
+    pub fn toggle_app_mute(&self, device_id: &str) -> bool {
+        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
+            return false;
+        };
+        self.pulse.toggle_mute(&key);
+        true
+    }
+
+    /// True once focus tracking is live. False on desktops with no supported compositor, which is
+    /// how the hosts tell the user a focus-following action will not work there.
+    pub fn is_focus_tracking_available(&self) -> bool {
+        self.focus.is_active()
+    }
+
+    /// Name of the app a focus-following action would act on right now, for the config UI.
+    pub fn focused_app_name(&self) -> Option<String> {
+        self.pulse.focused_app(&self.focus).map(|app| app.name)
+    }
+
+    /// Whether this action is bound to an app stream rather than a PipeWeaver device.
+    pub fn is_app_device(device_id: &str) -> bool {
+        crate::pulse::app_key_from_device_id(device_id).is_some()
     }
 
     pub fn get_devices(&self) -> Vec<Device> {
@@ -654,18 +727,24 @@ impl DeckWeaverCore {
         let actions = self.actions.clone();
         let meter_data = self.meter_data.clone();
         let pending_updates = self.pending_updates.clone();
+        let pulse = self.pulse.clone();
+        let focus = self.focus.clone();
 
         std::thread::Builder::new()
             .name("deckweaver-render".into())
             .spawn(move || {
                 let mut renderers = Renderers::new();
-                let mut last_available = false;
+                // Tracked as a pair because the two backends come and go independently, and a
+                // change in either has to force a re-render of the actions that depend on it.
+                let mut last_available = (false, false);
 
                 while running.load(Ordering::SeqCst) {
                     let frame_start = Instant::now();
-                    let available = service_available.load(Ordering::Relaxed);
-                    let availability_changed = available != last_available;
-                    last_available = available;
+                    let pipeweaver_available = service_available.load(Ordering::Relaxed);
+                    let pulse_available = pulse.is_available();
+                    let availability_changed =
+                        (pipeweaver_available, pulse_available) != last_available;
+                    last_available = (pipeweaver_available, pulse_available);
                     let mut label_updates = Vec::new();
 
                     let action_ids: Vec<String> = {
@@ -685,24 +764,50 @@ impl DeckWeaverCore {
                                 continue;
                             };
 
-                            state.device = status_guard
-                                .as_ref()
-                                .and_then(|st| {
-                                    st.get_device(device_id, state.config.device_type).or_else(
-                                        || {
-                                            if state.config.action_type == ActionType::Slider {
-                                                st.get_device(device_id, None)
-                                            } else {
-                                                None
-                                            }
-                                        },
+                            // App actions resolve against the sound server instead of the
+                            // PipeWeaver status, keyed off the `app:` prefix in the device id.
+                            state.device = if crate::pulse::app_key_from_device_id(device_id)
+                                .is_some()
+                            {
+                                let app = pulse.app_for(device_id, &focus);
+                                // Routing and icon are properties of whichever app is resolved
+                                // right now, which changes under a focus-following action, so
+                                // they are refreshed every frame rather than at configure time.
+                                state.config.routed_to =
+                                    app.as_ref().and_then(|a| a.routed_to.clone());
+                                state.config.app_icon_path = app.as_ref().and_then(|a| {
+                                    crate::icon_loader::find_icon_for_app(
+                                        a.icon_name.as_deref(),
+                                        &a.name,
+                                        Some(&a.key),
                                     )
-                                })
-                                .map(|device| {
-                                    device.with_selected_source_mix(state.config.source_mix_b)
                                 });
+                                app.map(|a| a.to_device())
+                            } else {
+                                status_guard
+                                    .as_ref()
+                                    .and_then(|st| {
+                                        st.get_device(device_id, state.config.device_type).or_else(
+                                            || {
+                                                if state.config.action_type == ActionType::Slider {
+                                                    st.get_device(device_id, None)
+                                                } else {
+                                                    None
+                                                }
+                                            },
+                                        )
+                                    })
+                                    .map(|device| {
+                                        device.with_selected_source_mix(state.config.source_mix_b)
+                                    })
+                            };
 
-                            if state.config.meters_enabled {
+                            // Meter levels come off the PipeWeaver feed, which knows nothing about
+                            // app streams, so app actions render with an idle meter lane rather
+                            // than whatever a same-named key happened to leave behind.
+                            if state.config.meters_enabled
+                                && crate::pulse::app_key_from_device_id(device_id).is_none()
+                            {
                                 let meter_guard = meter_data.read();
                                 if let Some(&meter) = meter_guard.get(device_id) {
                                     state.set_meter(meter);
@@ -755,9 +860,16 @@ impl DeckWeaverCore {
                                     ActionType::Knob => KNOB_ICON_SIZE,
                                     _ => (s.config.width as f32) * 0.5,
                                 };
+                                // Explicit user choice first, the app's own icon only as a
+                                // fallback, so setting a custom icon always overrides it.
+                                let icon_path = s
+                                    .config
+                                    .icon_path
+                                    .as_deref()
+                                    .or(s.config.app_icon_path.as_deref());
                                 let cached_icon = s.get_cached_icon(
                                     s.config.icon_png.as_deref(),
-                                    s.config.icon_path.as_deref(),
+                                    icon_path,
                                     max_icon_size,
                                 );
 
@@ -774,6 +886,21 @@ impl DeckWeaverCore {
                                         None
                                     };
 
+                                // Each action is gated on the backend it actually talks to, so a
+                                // dead PipeWeaver connection no longer blanks the app actions
+                                // (and vice versa).
+                                let is_app_action = s
+                                    .config
+                                    .device_id
+                                    .as_deref()
+                                    .and_then(crate::pulse::app_key_from_device_id)
+                                    .is_some();
+                                let action_available = if is_app_action {
+                                    pulse_available
+                                } else {
+                                    pipeweaver_available
+                                };
+
                                 (
                                     id.clone(),
                                     s.config.clone(),
@@ -783,6 +910,8 @@ impl DeckWeaverCore {
                                     cached_knob_base,
                                     uses_knob_meter_cache,
                                     needs_knob_base_rebuild,
+                                    is_app_action,
+                                    action_available,
                                 )
                             })
                             .collect()
@@ -797,6 +926,8 @@ impl DeckWeaverCore {
                         cached_knob_base,
                         uses_knob_meter_cache,
                         needs_knob_base_rebuild,
+                        is_app_action,
+                        available,
                     ) in tasks
                     {
                         let cached_knob_base = if uses_knob_meter_cache && needs_knob_base_rebuild {
@@ -842,7 +973,10 @@ impl DeckWeaverCore {
                                 cached_knob_base.as_ref(),
                             )
                         } else if config.device_id.is_some()
-                            && status.read().is_some()
+                            // An app that is not currently playing has no stream to control, and
+                            // the sound server is already known good here, so this is a settled
+                            // "nothing to show" rather than a state still being fetched.
+                            && (is_app_action || status.read().is_some())
                         {
                             renderers.render_unavailable(&config)
                         } else {
@@ -983,6 +1117,7 @@ fn knob_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -
             device.target_mix_b.unwrap_or(false)
         },
         source_volumes_linked: device.source_volumes_linked.unwrap_or(false),
+        routed_to: config.routed_to.clone(),
         mute_profile: config.mute_profile_index,
         mute_profile_muted: config.mute_profile_muted,
         show_volume: config.show_volume,
@@ -1003,6 +1138,8 @@ fn slider_render_params(config: &ActionConfig, device: &Device, meter_value: u8)
         meters_enabled: config.meters_enabled,
         mix_b_active: false,
         source_volumes_linked: false,
+        // Slider halves have no status row to put it in.
+        routed_to: None,
         mute_profile: 0,
         mute_profile_muted: false,
         show_volume: false,

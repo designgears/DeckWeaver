@@ -27,6 +27,7 @@ from gi.repository import Adw, GdkPixbuf, GLib, Gtk
 logging.getLogger("deckweaver").setLevel(logging.DEBUG)
 
 from .deckweaver import (
+    FOCUSED_DEVICE_ID,
     VERSION,
     DeckWeaverCore,
     ActionConfig,
@@ -196,6 +197,48 @@ class DeckWeaver(PluginBase):
                 action_base=SliderAction,
                 action_id_suffix="Slider",
                 action_name=self.lm.get("actions.slider.name", "PipeWeaver Slider"),
+                action_support={
+                    Input.Key: ActionInputSupport.SUPPORTED,
+                    Input.Dial: ActionInputSupport.UNSUPPORTED,
+                    Input.Touchscreen: ActionInputSupport.SUPPORTED,
+                },
+            )
+        )
+
+        self.add_action_holder(
+            ActionHolder(
+                plugin_base=self,
+                action_base=AppKnobAction,
+                action_id_suffix="AppKnob",
+                action_name=self.lm.get("actions.app_knob.name", "App Volume Knob"),
+                action_support={
+                    Input.Key: ActionInputSupport.UNSUPPORTED,
+                    Input.Dial: ActionInputSupport.SUPPORTED,
+                    Input.Touchscreen: ActionInputSupport.SUPPORTED,
+                },
+            )
+        )
+
+        self.add_action_holder(
+            ActionHolder(
+                plugin_base=self,
+                action_base=AppButtonAction,
+                action_id_suffix="AppButton",
+                action_name=self.lm.get("actions.app_button.name", "App Volume"),
+                action_support={
+                    Input.Key: ActionInputSupport.SUPPORTED,
+                    Input.Dial: ActionInputSupport.UNSUPPORTED,
+                    Input.Touchscreen: ActionInputSupport.SUPPORTED,
+                },
+            )
+        )
+
+        self.add_action_holder(
+            ActionHolder(
+                plugin_base=self,
+                action_base=AppSliderAction,
+                action_id_suffix="AppSlider",
+                action_name=self.lm.get("actions.app_slider.name", "App Volume Slider"),
                 action_support={
                     Input.Key: ActionInputSupport.SUPPORTED,
                     Input.Dial: ActionInputSupport.UNSUPPORTED,
@@ -560,6 +603,20 @@ class BaseAction(ActionBase):
         self.icon_row = icon_row
         return icon_row
 
+    def _backend_available(self) -> bool:
+        """Which service this action needs before its config UI is worth showing. The app actions
+        override this: they talk to the sound server, not PipeWeaver."""
+        return self._core.is_available()
+
+    def _backend_unavailable_title(self) -> str:
+        return self.plugin_base.lm.get("ui.error.not_running.title")
+
+    def _backend_unavailable_subtitle(self) -> str:
+        return self.plugin_base.lm.get("ui.error.not_running.subtitle")
+
+    def _device_picker_title(self) -> str:
+        return self.plugin_base.lm.get("ui.device.title")
+
     def get_config_rows(self):
         """Return configuration UI rows - matching original GitHub style"""
         lm = self.plugin_base.lm
@@ -568,16 +625,16 @@ class BaseAction(ActionBase):
         self.icon_row = None
         self.icon_preview = None
 
-        if not self._core.is_available():
+        if not self._backend_available():
             error_row = Adw.ActionRow()
-            error_row.set_title(lm.get("ui.error.not_running.title"))
-            error_row.set_subtitle(lm.get("ui.error.not_running.subtitle"))
+            error_row.set_title(self._backend_unavailable_title())
+            error_row.set_subtitle(self._backend_unavailable_subtitle())
             error_row.add_css_class("warning")
             return [error_row]
 
         # Device Expander Row (original style)
         self.device_expander = Adw.ExpanderRow()
-        self.device_expander.set_title(lm.get("ui.device.title"))
+        self.device_expander.set_title(self._device_picker_title())
         self.device_expander.set_subtitle(self._device_name or "No device selected")
         
         self.device_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -1524,3 +1581,231 @@ class SliderAction(BaseAction):
             self._core.set_volume_relative(
                 self._device_id, self._volume_step, self._device_type
             )
+
+
+class AppActionMixin:
+    """Shared behaviour for the per-application volume actions.
+
+    These bypass PipeWeaver entirely and talk to the sound server, so they work on a machine that
+    has never run it. An action stores an "app:<binary>" device id, which survives the app being
+    closed and reopened — sink input indices do not.
+    """
+
+    def _backend_available(self) -> bool:
+        return self._core.is_pulse_available()
+
+    def _backend_unavailable_title(self) -> str:
+        return "No sound server available"
+
+    def _backend_unavailable_subtitle(self) -> str:
+        return "PulseAudio or PipeWire is not reachable"
+
+    def _device_picker_title(self) -> str:
+        return "Application"
+
+    def _populate_device_list(self, retry_count: int = 0):
+        """Replace the PipeWeaver device list with the apps currently playing audio."""
+        self._clear_box_children(self.device_container)
+        apps = self._core.get_apps()
+
+        # Nothing is playing yet is a normal transient state right after login, so retry a few
+        # times before settling on the empty message.
+        if not apps:
+            if retry_count < 5:
+                loading_row = Adw.ActionRow()
+                loading_row.set_title("Looking for apps…")
+                loading_row.set_sensitive(False)
+                self.device_container.append(loading_row)
+                GLib.timeout_add(
+                    500, lambda: self._populate_device_list(retry_count + 1) or False
+                )
+                return
+
+            empty_row = Adw.ActionRow()
+            empty_row.set_title("No apps are playing audio")
+            empty_row.set_subtitle("Start playback in an app, then refresh")
+            empty_row.set_sensitive(False)
+            self.device_container.append(empty_row)
+
+        if self._device_id and not self._device_name:
+            for app in apps:
+                if app.id == self._device_id:
+                    self._device_name = app.name
+                    if self.device_expander is not None:
+                        self.device_expander.set_subtitle(app.name)
+                    break
+
+        group = Adw.PreferencesGroup()
+        group.set_margin_top(12)
+        group.set_margin_bottom(6)
+
+        # Offered only where the compositor can actually report focus, so it cannot be picked on a
+        # desktop where it would silently never resolve.
+        if self._core.is_focus_tracking_available():
+            group.add(self._build_focus_row())
+
+        for app in apps:
+            row = self._build_app_row(app)
+            group.add(row)
+            if app.id == self._device_id:
+                row.add_css_class("selected")
+
+        # An app only appears while it holds a stream, so a configured app that is closed would
+        # otherwise vanish from this list and look unset. Keep it visible and say why.
+        if (
+            self._device_id
+            and self._device_id != FOCUSED_DEVICE_ID
+            and not any(app.id == self._device_id for app in apps)
+        ):
+            group.add(self._build_missing_app_row())
+
+        self.device_container.append(group)
+
+    def _build_focus_row(self) -> Adw.ActionRow:
+        """Row for the follow-the-focused-window target."""
+        row = Adw.ActionRow()
+        row.set_title("Focused application")
+        current = self._core.focused_app_name()
+        row.set_subtitle(
+            f"Now: {current}" if current else "Focused window is not playing audio"
+        )
+        row.app_data = None
+        row.focus_target = True
+        row.set_activatable(True)
+        row.connect("activated", self._on_focus_row_activated)
+        if self._device_id == FOCUSED_DEVICE_ID:
+            row.add_css_class("selected")
+        return row
+
+    def _on_focus_row_activated(self, row: Adw.ActionRow):
+        self._device_id = FOCUSED_DEVICE_ID
+        self._device_name = "Focused application"
+        self._device_type = DeviceType.source()
+        self._persist_settings(
+            device_id=FOCUSED_DEVICE_ID,
+            device_name=self._device_name,
+            device_type=self._device_type_setting_value(self._device_type),
+        )
+        if self.device_expander is not None:
+            self.device_expander.set_subtitle(self._device_name)
+        self._update_config()
+
+    def _build_app_row(self, app) -> Adw.ActionRow:
+        row = Adw.ActionRow()
+        row.set_title(app.name)
+        state = "Muted" if app.is_muted else f"{app.volume}%"
+        row.set_subtitle(f"{state} · {app.routed_to}" if app.routed_to else state)
+        row.app_data = app
+        row.set_activatable(True)
+        row.connect("activated", self._on_app_row_activated)
+        return row
+
+    def _build_missing_app_row(self) -> Adw.ActionRow:
+        row = Adw.ActionRow()
+        row.set_title(self._device_name or str(self._device_id).removeprefix("app:"))
+        row.set_subtitle("Not playing")
+        row.set_sensitive(False)
+        row.add_css_class("selected")
+        return row
+
+    def _on_app_row_activated(self, row: Adw.ActionRow):
+        app = getattr(row, "app_data", None)
+        if not app:
+            return
+        self._device_id = app.id
+        self._device_name = app.name
+        self._device_type = DeviceType.source()
+        self._persist_settings(
+            device_id=app.id,
+            device_name=app.name,
+            device_type=self._device_type_setting_value(self._device_type),
+        )
+        if self.device_expander is not None:
+            self.device_expander.set_subtitle(app.name)
+        self._update_config()
+
+
+class AppKnobAction(AppActionMixin, BaseAction):
+    """Per-application volume on a dial."""
+
+    ACTION_TYPE = ActionType.knob()
+    SHOW_METERS_ROW = True
+    SHOW_VOLUME_ROW = True
+    VOLUME_STEP_RANGE = (1, 20)
+
+    def event_callback(self, event: Any, data: Any):
+        if not self._device_id:
+            return
+
+        if event == Input.Dial.Events.TURN_CW:
+            self._core.set_app_volume_relative(self._device_id, self._volume_step)
+        elif event == Input.Dial.Events.TURN_CCW:
+            self._core.set_app_volume_relative(self._device_id, -self._volume_step)
+        elif event in (
+            Input.Dial.Events.SHORT_UP,
+            Input.Dial.Events.SHORT_TOUCH_PRESS,
+        ):
+            self._core.toggle_app_mute(self._device_id)
+
+
+class AppButtonAction(AppActionMixin, BaseAction):
+    """Per-application volume on a key (positive = up, negative = down, zero = mute)."""
+
+    ACTION_TYPE = ActionType.button()
+    VOLUME_STEP_RANGE = (-20, 20)
+    VOLUME_STEP_SUBTITLE = "Positive = vol up, Negative = vol down, Zero = mute toggle"
+
+    def _resolved_icon_path(self) -> Optional[str]:
+        return super()._resolved_icon_path() or (
+            DEFAULT_BUTTON_ICON_PATH if os.path.exists(DEFAULT_BUTTON_ICON_PATH) else None
+        )
+
+    def event_callback(self, event: Any, data: Any):
+        if event == Input.Key.Events.SHORT_UP and self._device_id:
+            if self._volume_step == 0:
+                self._core.toggle_app_mute(self._device_id)
+            else:
+                self._core.set_app_volume_relative(self._device_id, self._volume_step)
+
+
+class AppSliderAction(AppActionMixin, BaseAction):
+    """Per-application volume as one half of a virtual slider."""
+
+    ACTION_TYPE = ActionType.slider()
+    VOLUME_STEP_RANGE = (-20, 20)
+    VOLUME_STEP_SUBTITLE = "Positive = top slider, Negative = bottom"
+    SHOW_METERS_ROW = True
+
+    def _build_config(self) -> ActionConfig:
+        config = super()._build_config()
+        settings = self.get_settings()
+        config.orientation = settings.get("orientation", "vertical")
+        config.is_top = self._volume_step > 0
+        return config
+
+    def get_config_rows(self):
+        rows = super().get_config_rows()
+
+        orientation_row = Adw.ActionRow()
+        orientation_row.set_title("Orientation")
+        orientation_row.set_subtitle("Slider direction")
+
+        self.orientation_combo = Gtk.ComboBoxText()
+        self.orientation_combo.append("vertical", "Vertical")
+        self.orientation_combo.append("horizontal", "Horizontal")
+        self.orientation_combo.set_active_id(
+            self.get_settings().get("orientation", "vertical")
+        )
+        self.orientation_combo.connect("changed", self._on_orientation_changed)
+        orientation_row.add_suffix(self.orientation_combo)
+        rows.append(orientation_row)
+
+        return rows
+
+    def _on_orientation_changed(self, combo: Gtk.ComboBoxText):
+        self._persist_settings(orientation=combo.get_active_id())
+        self._update_config()
+
+    def event_callback(self, event: Any, data: Any):
+        if event == Input.Key.Events.SHORT_UP and self._device_id:
+            self._core.set_app_volume_relative(self._device_id, self._volume_step)

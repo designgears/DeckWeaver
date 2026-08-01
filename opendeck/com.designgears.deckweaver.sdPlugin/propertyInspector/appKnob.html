@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DeckWeaver App Knob</title>
+  <link rel="stylesheet" href="pi.css" />
+  <script src="pi.js"></script>
+</head>
+<body class="pi">
+  <div id="status" class="status">Connecting…</div>
+
+  <div id="iconPickerMount"></div>
+
+  <section class="section">
+    <label class="field-label" for="app">Application</label>
+    <select id="app"></select>
+    <p class="field-hint">Only apps currently playing audio are listed.</p>
+  </section>
+
+  <section class="section">
+    <label class="field-label" for="volumeStep">Volume step</label>
+    <input id="volumeStep" type="number" min="1" max="20" />
+  </section>
+
+  <section class="section">
+    <label class="checkbox-row" for="metersEnabled">
+      <input id="metersEnabled" type="checkbox" />
+      <span>Show meters</span>
+    </label>
+    <label class="checkbox-row" for="showVolume" data-knob-only>
+      <input id="showVolume" type="checkbox" />
+      <span>Show volume percentage</span>
+    </label>
+  </section>
+
+  <footer class="pi-footer">
+    <button id="refresh" type="button" class="btn-secondary">Refresh apps</button>
+  </footer>
+
+  <script>
+    initAppInspector({
+      defaultVolumeStep: 5,
+      minVolumeStep: 1,
+      maxVolumeStep: 20,
+    });
+  </script>
+</body>
+</html>

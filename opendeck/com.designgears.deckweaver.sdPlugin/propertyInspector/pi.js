@@ -288,7 +288,8 @@ function initActionInspector(options) {
 
 // action.html is shared by the knob and button actions; only the knob renders the encoder
 // strip, so rows that only affect it are hidden elsewhere rather than silently doing nothing.
-const KNOB_ACTION_UUID = "com.designgears.deckweaver.knob";
+// app.html shares the same rows across the app knob/button/slider trio.
+const KNOB_ACTION_UUIDS = ["com.designgears.deckweaver.knob", "com.designgears.deckweaver.appknob"];
 
 function applyActionVisibility() {
   // Fail open. This first runs from initActionInspector, which the inline script in the page
@@ -296,7 +297,7 @@ function applyActionVisibility() {
   // knob?" test hides the row at load and never brings it back if the settings event that
   // re-runs this doesn't arrive. Hide only once we positively know it is some other action.
   const action = actionInfo?.action;
-  const isKnob = !action || action === KNOB_ACTION_UUID;
+  const isKnob = !action || KNOB_ACTION_UUIDS.includes(action);
   document.querySelectorAll("[data-knob-only]").forEach((el) => {
     el.hidden = !isKnob;
   });
@@ -326,6 +327,10 @@ function populateFromSettings() {
 }
 
 function handlePluginMessage(payload) {
+  if (payload.event === "apps") {
+    handleApps(payload);
+    return;
+  }
   if (payload.event !== "devices") return;
   if (!payload.available) {
     setStatus("PipeWeaver is not running on localhost:14565", true);
@@ -363,6 +368,94 @@ function handleSwitchDevices(payload) {
     if (device.node_id === settings.hardware_device_node_id) option.selected = true;
     physical.appendChild(option);
   }
+}
+
+function handleApps(payload) {
+  if (!payload.available) {
+    setStatus("No sound server available", true);
+    return;
+  }
+  const apps = payload.apps || [];
+  setStatus(apps.length ? `${apps.length} app(s) playing audio` : "No apps are playing audio");
+
+  const select = document.getElementById("app");
+  if (!select) return;
+
+  select.innerHTML = "";
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Select an application…";
+  select.appendChild(empty);
+
+  // Offered only where the compositor can actually report focus, so it can't be selected on a
+  // desktop where it would silently never resolve.
+  if (payload.focusAvailable && payload.focusId) {
+    const focused = document.createElement("option");
+    focused.value = payload.focusId;
+    focused.textContent = payload.focusedApp
+      ? `Focused application — now: ${payload.focusedApp}`
+      : "Focused application";
+    if (payload.focusId === settings.device_id) focused.selected = true;
+    select.appendChild(focused);
+  }
+
+  for (const app of apps) {
+    const option = document.createElement("option");
+    option.value = app.id;
+    const state = app.muted ? "muted" : `${app.volume}%`;
+    option.textContent = app.routedTo
+      ? `${app.name} — ${state} — ${app.routedTo}`
+      : `${app.name} — ${state}`;
+    if (app.id === settings.device_id) option.selected = true;
+    select.appendChild(option);
+  }
+
+  // Apps only appear here while they hold a stream, so a configured app that is closed (or just
+  // silent) would otherwise drop out of the list and reset the binding to "none" the next time
+  // this panel opened. Keep it selectable and say why it looks inert.
+  if (
+    settings.device_id &&
+    settings.device_id !== payload.focusId &&
+    !apps.some((app) => app.id === settings.device_id)
+  ) {
+    const option = document.createElement("option");
+    option.value = settings.device_id;
+    option.textContent = `${appNameFromId(settings.device_id)} — not playing`;
+    option.selected = true;
+    select.appendChild(option);
+  }
+}
+
+// Device ids are "app:<key>", and the key is the process binary, which is a reasonable label to
+// fall back on when the app is not running to tell us its display name.
+function appNameFromId(deviceId) {
+  return String(deviceId).replace(/^app:/, "") || deviceId;
+}
+
+function initAppInspector(options) {
+  window.deckweaverPiOptions = options;
+  if (options.showIconPicker !== false) {
+    wireFaIconPicker();
+  }
+  const requestApps = () => {
+    websocket?.send(JSON.stringify({ event: "sendToPlugin", context: uuid, payload: { event: "refreshApps" } }));
+  };
+  document.getElementById("refresh")?.addEventListener("click", requestApps);
+  document.getElementById("app")?.addEventListener("change", (event) => {
+    saveSettings({ device_id: event.target.value || null, device_type: "source" });
+  });
+  document.getElementById("volumeStep")?.addEventListener("change", (event) => {
+    saveSettings({ volume_step: Number(event.target.value) });
+  });
+  document.getElementById("orientation")?.addEventListener("change", (event) => {
+    saveSettings({ orientation: event.target.value });
+  });
+  document.getElementById("metersEnabled")?.addEventListener("change", (event) => {
+    saveSettings({ meters_enabled: event.target.checked });
+  });
+  document.getElementById("showVolume")?.addEventListener("change", (event) => {
+    saveSettings({ show_volume: event.target.checked });
+  });
 }
 
 function initSourceSwitchInspector({ inputMode }) {

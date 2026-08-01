@@ -270,6 +270,45 @@ pub async fn send_devices(instance: &Instance) -> openaction::OpenActionResult<(
     instance.send_to_property_inspector(payload).await
 }
 
+/// Applications currently playing audio, for the app actions' picker.
+///
+/// Built by hand rather than deriving `Serialize` on `AppStream` so the wire shape stays a
+/// deliberate choice: the picker needs a stable id to store and a name to show, and nothing else
+/// the backend happens to track.
+pub async fn send_apps(instance: &Instance) -> openaction::OpenActionResult<()> {
+    let payload = {
+        let core_arc = core();
+        let core = core_arc.lock();
+        let apps: Vec<serde_json::Value> = core
+            .get_apps()
+            .into_iter()
+            .map(|app| {
+                serde_json::json!({
+                    "id": app.device_id(),
+                    "key": app.key,
+                    "name": app.name,
+                    "volume": app.volume,
+                    "muted": app.is_muted,
+                    "iconName": app.icon_name,
+                    "routedTo": app.routed_to,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "event": "apps",
+            "available": core.is_pulse_available(),
+            "apps": apps,
+            // Lets the picker offer "focused application" only where it can actually work, and
+            // show what it currently resolves to.
+            "focusId": deckweaver_core::FOCUSED_DEVICE_ID,
+            "focusAvailable": core.is_focus_tracking_available(),
+            "focusedApp": core.focused_app_name(),
+        })
+    };
+    instance.send_to_property_inspector(payload).await
+}
+
 pub fn unregister_instance(instance: &Instance) {
     core()
         .lock()
@@ -284,6 +323,7 @@ pub async fn handle_pi_message(
 ) -> openaction::OpenActionResult<()> {
     match payload.get("event").and_then(|v| v.as_str()) {
         Some("refreshDevices") => send_devices(instance).await,
+        Some("refreshApps") => send_apps(instance).await,
         _ => Ok(()),
     }
 }

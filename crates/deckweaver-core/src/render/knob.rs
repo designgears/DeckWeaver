@@ -227,6 +227,24 @@ impl KnobRenderer {
     }
 
     fn draw_status_row(&self, pixmap: &mut Pixmap, params: &RenderParams) {
+        // An app stream has no mute profiles, no A/B mix and no volume linking, so those chips
+        // would be three pieces of dead furniture. Show where the app is routed instead — the one
+        // piece of routing state that is both real and not visible anywhere else on the strip.
+        if let Some(channel) = params.routed_to.as_deref() {
+            let width = self.width as f32 - theme::PAD * 2.0;
+            let label = truncate_to_width(channel, theme::LABEL_SIZE, width - theme::PAD * 2.0);
+            draw_chip(
+                pixmap,
+                theme::PAD,
+                theme::CHIP_Y_BOTTOM,
+                width,
+                &label,
+                theme::CHIP_BG,
+                theme::TEXT_SECONDARY,
+            );
+            return;
+        }
+
         // The mute chip keeps the same slot in both states, so the label doesn't shift when you
         // mute — only the fill changes.
         let (fill, text) = if params.mute_profile_muted {

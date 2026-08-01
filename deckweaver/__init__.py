@@ -12,9 +12,11 @@ except ImportError as exc:
 # Re-export public API
 VERSION = _core.VERSION
 DEFAULT_PORT = _core.DEFAULT_PORT
+FOCUSED_DEVICE_ID = _core.FOCUSED_DEVICE_ID
 DeckWeaverCore = _core.DeckWeaverCore
 ActionConfig = _core.ActionConfig
 ActionType = _core.ActionType
+AppStream = _core.AppStream
 Device = _core.Device
 DeviceColor = _core.DeviceColor
 DeviceType = _core.DeviceType
@@ -29,9 +31,11 @@ __version__ = VERSION
 __all__ = [
     "VERSION",
     "DEFAULT_PORT",
+    "FOCUSED_DEVICE_ID",
     "DeckWeaverCore",
     "ActionConfig",
     "ActionType",
+    "AppStream",
     "Device",
     "DeviceColor",
     "DeviceType",
