@@ -542,11 +542,16 @@ impl RawStream {
             .map(|b| clean_binary(&b));
         let app_name = props.get_str("application.name");
 
-        let name = app_name
+        // What the app calls itself is often the toolkit rather than the product: Vesktop reports
+        // "Chromium". Its desktop entry says "Vesktop", so that is preferred wherever one is
+        // found, with the reported name as the fallback for apps that ship no entry.
+        let reported = app_name
             .clone()
             .or_else(|| binary.clone())
             .or_else(|| info.name.as_ref().map(|n| n.to_string()))
             .unwrap_or_else(|| format!("Stream {}", info.index));
+        let name = crate::icon_loader::find_desktop_name_for_app(&reported, binary.as_deref())
+            .unwrap_or(reported);
 
         // Prefer the binary: an app's display name can change with what it is playing (browsers
         // put the tab title in it on some sites), while the binary stays put.

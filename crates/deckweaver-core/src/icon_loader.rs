@@ -349,9 +349,11 @@ pub fn find_icon_for_app(
         return hit.clone();
     }
 
-    let resolved = icon_name
-        .and_then(find_icon_by_name)
-        .or_else(|| icon_from_desktop_entry(app_name, binary))
+    // The desktop entry is tried first: an app that lies about its name lies about its icon too
+    // (Vesktop advertises "chromium-browser"), and the entry is the one thing it ships to describe
+    // itself accurately. `application.icon_name` is the fallback for apps with no entry at all.
+    let resolved = icon_from_desktop_entry(app_name, binary)
+        .or_else(|| icon_name.and_then(find_icon_by_name))
         // Last resort: some apps do use their binary as the icon name.
         .or_else(|| binary.and_then(find_icon_by_name));
 
@@ -363,8 +365,8 @@ pub fn find_icon_for_app(
 
 /// Find the `.desktop` entry belonging to this app and resolve its `Icon=`.
 fn icon_from_desktop_entry(app_name: &str, binary: Option<&str>) -> Option<String> {
-    let (_, icon) = best_desktop_entry(app_name, binary)?;
-    find_icon_by_name(&icon)
+    let entry = best_desktop_entry(app_name, binary)?;
+    find_icon_by_name(&entry.icon)
 }
 
 /// Desktop entry id for an app, e.g. "org.mozilla.firefox".
@@ -374,16 +376,24 @@ fn icon_from_desktop_entry(app_name: &str, binary: Option<&str>) -> Option<Strin
 /// one name both sides agree on: the compositor knows which entry launched a window, and the
 /// entry is what we can match audio properties against.
 pub fn find_desktop_id_for_app(app_name: &str, binary: Option<&str>) -> Option<String> {
-    best_desktop_entry(app_name, binary).map(|(id, _)| id)
+    best_desktop_entry(app_name, binary).map(|entry| entry.id)
+}
+
+/// Display name from an app\'s desktop entry, which is what the app calls itself to the user.
+///
+/// Preferred over `application.name` because Electron apps routinely report the toolkit rather
+/// than themselves — Vesktop shows up as "Chromium".
+pub fn find_desktop_name_for_app(app_name: &str, binary: Option<&str>) -> Option<String> {
+    best_desktop_entry(app_name, binary).and_then(|entry| entry.name)
 }
 
 /// Best-matching desktop entry for an app, as (id, icon name).
 ///
 /// Cached: the focus matcher asks for this on every rendered frame, and the answer is a directory
 /// scan that does not change during a session.
-fn best_desktop_entry(app_name: &str, binary: Option<&str>) -> Option<(String, String)> {
+fn best_desktop_entry(app_name: &str, binary: Option<&str>) -> Option<DesktopEntry> {
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<HashMap<String, Option<(String, String)>>>,
+        std::sync::Mutex<HashMap<String, Option<DesktopEntry>>>,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let cache_key = format!("{app_name}\u{1}{}", binary.unwrap_or_default());
@@ -400,7 +410,15 @@ fn best_desktop_entry(app_name: &str, binary: Option<&str>) -> Option<(String, S
     found
 }
 
-fn scan_desktop_entries(app_name: &str, binary: Option<&str>) -> Option<(String, String)> {
+/// A matched desktop entry: its id (file stem), icon name, and display name.
+#[derive(Clone)]
+struct DesktopEntry {
+    id: String,
+    icon: String,
+    name: Option<String>,
+}
+
+fn scan_desktop_entries(app_name: &str, binary: Option<&str>) -> Option<DesktopEntry> {
     let app_name = app_name.trim().to_lowercase();
     let binary = binary.map(|b| b.trim().to_lowercase());
     // "firefox-bin" is the process; "firefox" is what the desktop entry calls itself. Trying the
@@ -411,7 +429,7 @@ fn scan_desktop_entries(app_name: &str, binary: Option<&str>) -> Option<(String,
             .map(|s| s.to_string())
     });
 
-    let mut best: Option<(u32, String, String)> = None;
+    let mut best: Option<(u32, DesktopEntry)> = None;
     for dir in desktop_entry_dirs() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -442,31 +460,69 @@ fn scan_desktop_entries(app_name: &str, binary: Option<&str>) -> Option<(String,
             // directly made `None == None` a match, so any entry without a StartupWMClass matched
             // any app without one — which is most of both, and handed out the first icon it found
             // to everything.
-            let matches_class = wm_class.as_deref().is_some_and(|class| {
-                Some(class) == binary.as_deref()
-                    || Some(class) == binary_stem.as_deref()
-                    || class == app_name
-            });
-
-            let score = if matches_class {
-                3
-            } else if name.as_deref() == Some(app_name.as_str()) {
-                2
-            } else if Some(stem.as_str()) == binary.as_deref()
-                || Some(stem.as_str()) == binary_stem.as_deref()
-            {
-                1
-            } else {
+            let Some(score) = entry_score(
+                &stem,
+                name.as_deref(),
+                wm_class.as_deref(),
+                &app_name,
+                binary.as_deref(),
+                binary_stem.as_deref(),
+            ) else {
                 continue;
             };
 
-            if best.as_ref().is_none_or(|(s, _, _)| score > *s) {
-                best = Some((score, stem, icon));
+            if best.as_ref().is_none_or(|(s, _)| score > *s) {
+                best = Some((
+                    score,
+                    DesktopEntry {
+                        id: stem,
+                        icon,
+                        // Keep the original casing for display; `name` above is lowercased for
+                        // comparison only.
+                        name: desktop_key(&text, "Name"),
+                    },
+                ));
             }
         }
     }
 
-    best.map(|(_, stem, icon)| (stem, icon))
+    best.map(|(_, entry)| entry)
+}
+
+/// Rank how well a desktop entry identifies an app, or `None` if it does not match at all.
+///
+/// Everything derived from the binary outranks everything derived from the name the app reports.
+/// Electron and Chromium-embedding apps report the toolkit rather than themselves — Vesktop calls
+/// itself "Chromium" and advertises "chromium-browser" as its icon — so trusting the reported name
+/// hands them Chromium\'s entry, and with it Chromium\'s name and icon. The binary ("vesktop") is
+/// the part they get right.
+///
+/// Comparisons require the entry\'s side to be present: comparing two `Option`s made `None == None`
+/// a match, so any entry without a StartupWMClass once matched any app without one.
+fn entry_score(
+    stem: &str,
+    name: Option<&str>,
+    wm_class: Option<&str>,
+    app_name: &str,
+    binary: Option<&str>,
+    binary_stem: Option<&str>,
+) -> Option<u32> {
+    let matches_binary =
+        |value: &str| Some(value) == binary || Some(value) == binary_stem;
+
+    if wm_class.is_some_and(matches_binary) {
+        return Some(4);
+    }
+    if matches_binary(stem) {
+        return Some(3);
+    }
+    if wm_class == Some(app_name) {
+        return Some(2);
+    }
+    if name == Some(app_name) {
+        return Some(1);
+    }
+    None
 }
 
 /// First value for `key` in a desktop entry, ignoring localised variants (`Name[de]=`).
@@ -526,6 +582,38 @@ StartupWMClass=firefox
     #[test]
     fn localised_variants_do_not_shadow_the_plain_key() {
         assert_eq!(desktop_key(ENTRY, "Name").as_deref(), Some("Firefox"));
+    }
+
+    /// The reported bug: Vesktop calls itself "Chromium", so a name-first ranking gave it
+    /// Chromium\'s entry — and therefore Chromium\'s name and icon.
+    #[test]
+    fn the_binary_outranks_a_reported_name() {
+        let vesktop = entry_score("vesktop", Some("vesktop"), Some("vesktop"), "chromium", Some("vesktop"), None);
+        let chromium = entry_score("chromium", Some("chromium"), Some("chromium"), "chromium", Some("vesktop"), None);
+        assert!(vesktop > chromium, "the app\'s own binary must win over the name it reports");
+    }
+
+    /// Flatpak Firefox is binary "firefox-bin" against a "firefox" entry.
+    #[test]
+    fn a_bin_suffixed_binary_still_matches_its_entry() {
+        assert_eq!(
+            entry_score("firefox", Some("firefox"), None, "firefox", Some("firefox-bin"), Some("firefox")),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn an_unrelated_entry_does_not_match() {
+        assert_eq!(
+            entry_score("gimp", Some("gimp"), Some("gimp"), "chromium", Some("vesktop"), None),
+            None
+        );
+    }
+
+    /// Two absent fields must not be treated as agreeing with each other.
+    #[test]
+    fn absent_fields_do_not_match_each_other() {
+        assert_eq!(entry_score("gimp", None, None, "chromium", None, None), None);
     }
 
     #[test]

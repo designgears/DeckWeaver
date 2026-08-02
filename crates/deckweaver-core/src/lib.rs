@@ -19,7 +19,7 @@ pub use dimensions::{
     ENCODER_STRIP_WIDTH, KEYPAD_SIZE,
 };
 pub use icon_loader::{
-    find_desktop_id_for_app, find_icon_by_name, find_icon_for_app, load_icon_to_png_bytes,
+    find_desktop_id_for_app, find_desktop_name_for_app, find_icon_by_name, find_icon_for_app, load_icon_to_png_bytes,
     svg_data_to_png_bytes,
 };
 pub use focus::{detect_backend, is_same_or_descendant, Backend, FocusTracker, FocusedWindow};
