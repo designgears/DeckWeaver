@@ -9,7 +9,7 @@
 //! to a single worker thread. Everything the rest of the crate touches goes through the snapshot
 //! ([`AppStream`] values behind an `RwLock`) or the command channel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -439,6 +439,8 @@ fn run_session(
     let poll_result: Rc<RwLock<Option<Vec<RawStream>>>> = Rc::new(RwLock::new(None));
     // Local changes the server has not confirmed yet. See `reconcile`.
     let mut pending: HashMap<String, PendingChange> = HashMap::new();
+    // Apps the user has set a level on, and the streams already carrying it.
+    let mut managed: HashMap<String, Managed> = HashMap::new();
     // Sink index -> display name. Sinks change far less often than streams, so this is refreshed
     // on its own slower cadence.
     let sink_result: Rc<RwLock<Option<HashMap<u32, String>>>> = Rc::new(RwLock::new(None));
@@ -488,13 +490,14 @@ fn run_session(
             inflight = false;
             let mut apps = aggregate_with_sinks(raw, &sinks);
             reconcile(&mut apps, &mut pending);
+            adopt_new_streams(&mut context, &mut apps, &mut managed, &mut pending);
             *snapshot.write() = apps;
         }
 
         for command in command_rx.try_iter() {
             match command {
                 Command::Stop => return,
-                other => apply(&mut context, snapshot, &mut pending, other),
+                other => apply(&mut context, snapshot, &mut pending, &mut managed, other),
             }
         }
 
@@ -671,6 +674,96 @@ fn aggregate_with_sinks(raw: Vec<RawStream>, sinks: &HashMap<u32, String>) -> Ve
     apps
 }
 
+/// An app whose volume the user has set through us, and the streams we have already applied it to.
+///
+/// Browsers replace their sink input on every page load, and their audio backends explicitly set
+/// the new stream to their own internal level — full scale — right after creating it, which
+/// overrides PulseAudio's own stream-restore. Without adopting those newcomers, reloading a page
+/// snaps the app back to 100%: audibly, and on the key.
+struct Managed {
+    volume: u8,
+    muted: bool,
+    /// Stream indices already carrying our value.
+    known: HashSet<u32>,
+}
+
+/// Apply the user's chosen level to streams that have appeared since we last looked.
+///
+/// Only apps the user has actually adjusted through us are managed, so this never touches the
+/// volume of something they have not asked us to control. When no new streams appeared, the
+/// target follows whatever the streams currently say, so changing volume in pavucontrol updates
+/// the target rather than being fought over.
+fn adopt_new_streams(
+    context: &mut Context,
+    apps: &mut [AppStream],
+    managed: &mut HashMap<String, Managed>,
+    pending: &mut HashMap<String, PendingChange>,
+) {
+    let mut introspect = context.introspect();
+
+    for app in apps.iter_mut() {
+        let Some(entry) = managed.get_mut(&app.key) else {
+            continue;
+        };
+        let fresh = plan_adoption(app, entry);
+        if fresh.is_empty() {
+            continue;
+        }
+
+        let mut channel_volumes = ChannelVolumes::default();
+        channel_volumes.set(app.channels.max(1), percent_to_volume(entry.volume));
+        for index in fresh {
+            introspect.set_sink_input_volume(index, &channel_volumes, None);
+            introspect.set_sink_input_mute(index, entry.muted, None);
+        }
+
+        // Hold the target until the server confirms it, exactly as a user-initiated change does.
+        // Without this, the next poll lands before the write does, sees the stream still at the
+        // browser's own level, and — finding no *new* streams that time — accepts it as an
+        // external change. The value the user set is then overwritten by whatever the reload
+        // happened to start at.
+        pending.insert(
+            app.key.clone(),
+            PendingChange {
+                volume: entry.volume,
+                muted: entry.muted,
+                since: Instant::now(),
+            },
+        );
+    }
+
+    // Deliberately not pruning apps that currently have no streams. A page load destroys the old
+    // stream before creating the new one, and an app that vanishes for even one poll would lose
+    // the level the user set — so the new stream would come up at whatever the app or
+    // stream-restore chose. Entries are only ever created for apps the user has adjusted, so
+    // keeping them for the session costs nothing.
+}
+
+/// Decide which of an app's streams need the user's level pushed onto them.
+///
+/// Split out from the I/O so the rule can be tested without a sound server. Returns the stream
+/// indices to write to, and rewrites the reported volume when there are any.
+fn plan_adoption(app: &mut AppStream, entry: &mut Managed) -> Vec<u32> {
+    let current: HashSet<u32> = app.indices.iter().copied().collect();
+    let fresh: Vec<u32> = current.difference(&entry.known).copied().collect();
+
+    if fresh.is_empty() {
+        // Nothing new: trust the streams, and let an external change become the new target. This
+        // is what keeps pavucontrol and media keys working instead of being fought over.
+        entry.volume = app.volume;
+        entry.muted = app.is_muted;
+        entry.known = current;
+        return Vec::new();
+    }
+
+    // Report the target straight away rather than the newcomer's full-scale value, so the key
+    // never flashes 100% in the frame between the stream appearing and the change landing.
+    app.volume = entry.volume;
+    app.is_muted = entry.muted;
+    entry.known = current;
+    fresh
+}
+
 /// A change made locally that the server has not echoed back yet.
 struct PendingChange {
     volume: u8,
@@ -722,6 +815,7 @@ fn apply(
     context: &mut Context,
     snapshot: &Arc<RwLock<Vec<AppStream>>>,
     pending: &mut HashMap<String, PendingChange>,
+    managed: &mut HashMap<String, Managed>,
     command: Command,
 ) {
     let (key, target_volume, target_mute) = {
@@ -781,6 +875,17 @@ fn apply(
         if let Some(muted) = target_mute {
             app.is_muted = muted;
         }
+        // From now on this app's level is the user's choice, and any stream it opens later gets
+        // it too.
+        managed.insert(
+            key.clone(),
+            Managed {
+                volume: app.volume,
+                muted: app.is_muted,
+                known: indices.iter().copied().collect(),
+            },
+        );
+
         // Record what we expect to see so an in-flight poll cannot rewind it.
         pending.insert(
             key,
@@ -1059,6 +1164,118 @@ mod tests {
         let apps = aggregate(vec![raw("msedge", "Microsoft Edge", 1, 50, false)]);
         let mut remembered = None;
         assert!(sticky_focus(None, &mut remembered, &apps).is_none());
+    }
+
+    fn managed(volume: u8, muted: bool, known: &[u32]) -> Managed {
+        Managed {
+            volume,
+            muted,
+            known: known.iter().copied().collect(),
+        }
+    }
+
+    /// The reported bug: a browser replaces its stream on page load and sets the new one to full
+    /// scale, which would otherwise snap the app back to 100% both audibly and on the key.
+    #[test]
+    fn a_replacement_stream_is_pulled_back_to_the_chosen_level() {
+        let mut apps = aggregate(vec![raw("zen-bin", "Zen", 7, 100, false)]);
+        let mut entry = managed(35, false, &[3]);
+
+        let fresh = plan_adoption(&mut apps[0], &mut entry);
+
+        assert_eq!(fresh, vec![7], "the new stream must be written to");
+        assert_eq!(apps[0].volume, 35, "and must not be reported at full scale");
+    }
+
+    /// A second tab starting while one is already playing gets the same treatment.
+    #[test]
+    fn an_additional_stream_is_adopted_without_disturbing_the_first() {
+        let mut apps = aggregate(vec![
+            raw("zen-bin", "Zen", 1, 35, false),
+            raw("zen-bin", "Zen", 2, 100, false),
+        ]);
+        let mut entry = managed(35, false, &[1]);
+
+        let fresh = plan_adoption(&mut apps[0], &mut entry);
+
+        assert_eq!(fresh, vec![2]);
+        assert_eq!(apps[0].volume, 35);
+    }
+
+    /// Changing volume in pavucontrol must stick rather than being pulled back, or the two fight.
+    #[test]
+    fn an_external_change_becomes_the_new_target() {
+        let mut apps = aggregate(vec![raw("zen-bin", "Zen", 1, 80, false)]);
+        let mut entry = managed(35, false, &[1]);
+
+        let fresh = plan_adoption(&mut apps[0], &mut entry);
+
+        assert!(fresh.is_empty(), "nothing new, so nothing to write");
+        assert_eq!(apps[0].volume, 80, "the external value is respected");
+        assert_eq!(entry.volume, 80, "and becomes what new streams inherit");
+    }
+
+    #[test]
+    fn mute_is_adopted_alongside_volume() {
+        let mut apps = aggregate(vec![raw("zen-bin", "Zen", 9, 100, false)]);
+        let mut entry = managed(35, true, &[1]);
+
+        let fresh = plan_adoption(&mut apps[0], &mut entry);
+
+        assert_eq!(fresh, vec![9]);
+        assert!(apps[0].is_muted, "a replacement stream must not unmute the app");
+    }
+
+    /// Indices are recycled constantly; a stale one must not make a genuinely new stream look
+    /// already-adopted.
+    #[test]
+    fn dead_indices_are_pruned_from_the_known_set() {
+        let mut apps = aggregate(vec![raw("zen-bin", "Zen", 5, 35, false)]);
+        let mut entry = managed(35, false, &[1, 2, 3, 5]);
+
+        plan_adoption(&mut apps[0], &mut entry);
+
+        assert_eq!(entry.known, [5].into_iter().collect::<HashSet<u32>>());
+    }
+
+    /// The regression behind "it comes back lower": after adopting a replacement stream, the very
+    /// next poll can arrive before the write lands. That poll sees no *new* streams, so the
+    /// external-change rule would accept the browser's own level as the user's new target.
+    /// Holding the value through `pending` until the server confirms is what prevents it.
+    #[test]
+    fn an_unlanded_adoption_is_not_mistaken_for_an_external_change() {
+        let mut entry = managed(65, false, &[1]);
+
+        // Poll 1: the replacement stream shows up at full scale and gets adopted.
+        let mut apps = aggregate(vec![raw("zen-bin", "Zen", 9, 100, false)]);
+        assert_eq!(plan_adoption(&mut apps[0], &mut entry), vec![9]);
+        let mut pending = HashMap::from([(
+            "zen-bin".to_string(),
+            pending_change(entry.volume, entry.muted, Duration::ZERO),
+        )]);
+
+        // Poll 2: the write has not landed, so the stream still reads full scale.
+        let mut apps = aggregate(vec![raw("zen-bin", "Zen", 9, 100, false)]);
+        reconcile(&mut apps, &mut pending);
+        let fresh = plan_adoption(&mut apps[0], &mut entry);
+
+        assert!(fresh.is_empty(), "the stream is no longer new");
+        assert_eq!(apps[0].volume, 65, "reconcile must hold the adopted value");
+        assert_eq!(entry.volume, 65, "and the target must not drift to the browser's level");
+    }
+
+    /// A page load destroys the old stream before making the new one. If the app going quiet for a
+    /// single poll dropped its entry, the replacement would come up at whatever the app chose.
+    #[test]
+    fn a_gap_with_no_streams_does_not_lose_the_chosen_level() {
+        let mut entry = managed(65, false, &[1]);
+
+        // The app is briefly absent entirely, then returns on a new stream at full scale.
+        let mut apps = aggregate(vec![raw("zen-bin", "Zen", 4, 100, false)]);
+        let fresh = plan_adoption(&mut apps[0], &mut entry);
+
+        assert_eq!(fresh, vec![4]);
+        assert_eq!(apps[0].volume, 65, "the level set before the reload still applies");
     }
 
     #[test]
