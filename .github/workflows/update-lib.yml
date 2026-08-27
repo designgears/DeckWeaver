@@ -42,10 +42,61 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add deckweaver/_core.abi3.so opendeck/com.designgears.deckweaver.sdPlugin/
+          git add deckweaver/_core.abi3.so deckweaver.streamDeckPlugin opendeck/com.designgears.deckweaver.sdPlugin/
 
           # Skip commit if nothing changed
           git diff --cached --quiet && exit 0
 
           git commit -m "${{ github.event.head_commit.message }}"
           git push
+
+      ## Package both plugins for the release
+      - name: Package release assets
+        id: package
+        run: |
+          VERSION=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+
+          # OpenDeck: the bundle build.sh already zipped.
+          cp deckweaver.streamDeckPlugin "dist/deckweaver-opendeck-v$VERSION.streamDeckPlugin"
+
+          # StreamController: the plugin tree as it would be installed, mirroring the
+          # excludes in build.sh so the archive matches a local install.
+          mkdir -p stage/com_designgears_DeckWeaver
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='target' \
+            --exclude='crates' \
+            --exclude='opendeck' \
+            --exclude='streamcontroller' \
+            --exclude='.venv*' \
+            --exclude='build.sh' \
+            --exclude='Cargo.toml' \
+            --exclude='Cargo.lock' \
+            --exclude='*.md' \
+            --exclude='.gitignore' \
+            --exclude='dist' \
+            --exclude='stage' \
+            --exclude='deckweaver.streamDeckPlugin' \
+            ./ stage/com_designgears_DeckWeaver/
+          (cd stage && zip -r "../dist/deckweaver-streamcontroller-v$VERSION.zip" com_designgears_DeckWeaver)
+
+      ## Publish a release carrying both plugins
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          VERSION="${{ steps.package.outputs.version }}"
+          TAG="v$VERSION"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --target "$(git rev-parse HEAD)" \
+              --title "$TAG" \
+              --notes "$NOTES"
+          fi
