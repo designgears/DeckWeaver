@@ -123,8 +123,12 @@ pub async fn cycle_mute_profile(
     instance: &Instance,
     mut settings: ActionSettings,
 ) -> openaction::OpenActionResult<()> {
+    // Only selects which mix the press addresses. Pushing the stored value onto the new mix here
+    // would clobber a mute the user made in PipeWeaver's own UI.
     settings.mute_profile_index = (settings.mute_profile_index + 1) % MUTE_PROFILE_COUNT;
-    apply_mute_profile(instance, &mut settings).await
+    instance.set_settings(&settings).await?;
+    update_instance(instance, ActionType::Knob, &settings);
+    Ok(())
 }
 
 pub async fn toggle_active_profile_mute(
@@ -136,9 +140,15 @@ pub async fn toggle_active_profile_mute(
     if idx >= data.len() {
         return Ok(());
     }
-    data[idx] = !data[idx];
+    let config = build_config_for_instance(instance, ActionType::Knob, &settings);
+    let Some(muted) = core().lock().toggle_mute_profile(&config) else {
+        return Ok(());
+    };
+    data[idx] = muted;
     settings.mute_profile_data = Some(serde_json::to_string(&data).unwrap_or_default());
-    apply_mute_profile(instance, &mut settings).await
+    instance.set_settings(&settings).await?;
+    update_instance(instance, ActionType::Knob, &settings);
+    Ok(())
 }
 
 pub async fn toggle_knob_mix(
@@ -161,13 +171,3 @@ pub async fn toggle_knob_mix(
     Ok(())
 }
 
-async fn apply_mute_profile(
-    instance: &Instance,
-    settings: &mut ActionSettings,
-) -> openaction::OpenActionResult<()> {
-    let config = build_config_for_instance(instance, ActionType::Knob, settings);
-    core().lock().apply_mute_profile(&config);
-    instance.set_settings(settings).await?;
-    update_instance(instance, ActionType::Knob, settings);
-    Ok(())
-}

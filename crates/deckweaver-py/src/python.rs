@@ -714,6 +714,10 @@ impl DeckWeaverCore {
         self.inner.apply_mute_profile(&config.to_core())
     }
 
+    fn toggle_mute_profile(&self, config: &ActionConfig) -> Option<bool> {
+        self.inner.toggle_mute_profile(&config.to_core())
+    }
+
     fn switch_output_hardware_device(&self, target_id: &str, node_id: u32) -> bool {
         self.inner.switch_output_hardware_device(target_id, node_id)
     }

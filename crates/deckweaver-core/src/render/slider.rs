@@ -6,6 +6,7 @@
 //! crop a quarter turn.
 
 use super::common::*;
+use super::text::{draw_text, truncate_to_width, TextAlign, TextStyle};
 use super::theme;
 use tiny_skia::Pixmap;
 
@@ -23,8 +24,30 @@ impl SliderRenderer {
         params: &RenderParams,
         is_top: bool,
         is_horizontal: bool,
+        cached_icon: Option<&crate::action::CachedIcon>,
     ) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&self.render_internal(params, is_top, is_horizontal)?)
+        pixmap_to_rgba(&self.render_internal(params, is_top, is_horizontal, cached_icon)?)
+    }
+
+    /// Dimmed placeholder with a reason, used instead of the fault cross when an app action simply
+    /// has nothing playing to control.
+    pub fn render_idle_internal(&self, message: &str) -> Option<(Vec<u8>, u32, u32)> {
+        let mut pixmap = create_filled_pixmap(self.button_size, self.button_size, theme::IDLE_BG)?;
+        let width = self.button_size as f32 - theme::PAD * 2.0;
+        let label = truncate_to_width(message, width, theme::LABEL_SIZE);
+        draw_text(
+            &mut pixmap,
+            &label,
+            Rect::new(
+                theme::PAD,
+                (self.button_size as f32 - theme::LABEL_SIZE) * 0.5,
+                width,
+                theme::LABEL_SIZE * 1.4,
+                0.0,
+            ),
+            &TextStyle::new(theme::LABEL_SIZE, theme::TEXT_IDLE, TextAlign::Center),
+        );
+        pixmap_to_rgba(&pixmap)
     }
 
     pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
@@ -36,7 +59,7 @@ impl SliderRenderer {
 
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
         let params = RenderParams::default();
-        pixmap_to_rgba(&self.render_internal(&params, true, false)?)
+        pixmap_to_rgba(&self.render_internal(&params, true, false, None)?)
     }
 
     fn render_internal(
@@ -44,9 +67,19 @@ impl SliderRenderer {
         params: &RenderParams,
         is_top: bool,
         is_horizontal: bool,
+        cached_icon: Option<&crate::action::CachedIcon>,
     ) -> Option<Pixmap> {
         let mut full = Pixmap::new(self.button_size, self.button_size * 2)?;
         fill_background(&mut full, COLOR_TRANSPARENT);
+
+        // The app's art as a faded backdrop under the whole fader. Pre-cropped to cover the
+        // double-height stack (`IconSizing::Cover`), so a stacked pair of keys shows the two
+        // halves of one continuous image, the same way the bar splits.
+        if let Some(icon) = cached_icon {
+            let x = (self.button_size as i32 - icon.width as i32) / 2;
+            let y = (self.button_size as i32 * 2 - icon.height as i32) / 2;
+            blit_rgba8(&mut full, &icon.rgba8, x, y);
+        }
 
         self.draw_slider_stack(&mut full, params);
         self.render_meter_overlay(&mut full, params);

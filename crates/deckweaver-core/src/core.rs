@@ -448,6 +448,36 @@ impl DeckWeaverCore {
         }
     }
 
+    /// Flip the mute of the mix the active profile addresses.
+    ///
+    /// Works from what the server currently reports rather than the value stored in the action,
+    /// so a mute made in PipeWeaver's own UI is undone by the next press instead of being
+    /// re-applied. Returns the state that was requested so the host can persist it, or `None`
+    /// when the device is not known.
+    pub fn toggle_mute_profile(&self, config: &ActionConfig) -> Option<bool> {
+        let device_id = config.device_id.as_deref()?;
+        let is_app = Self::is_app_device(device_id);
+        let device = if is_app {
+            self.pulse.app_for(device_id, &self.focus)?.to_device()
+        } else {
+            self.get_device(device_id, config.device_type)?
+        };
+        let muted = !live_mute_state(config, &device);
+
+        let sent = if is_app {
+            self.set_app_mute(device_id, muted)
+        } else {
+            match config.device_type {
+                Some(DeviceType::Source) => {
+                    self.set_source_mute(device_id, config.mute_profile_index == 1, muted)
+                }
+                Some(DeviceType::Target) => self.set_target_mute(device_id, muted),
+                _ => false,
+            }
+        };
+        sent.then_some(muted)
+    }
+
     pub fn switch_output_hardware_device(&self, target_id: &str, node_id: u32) -> bool {
         self.switch_physical_hardware_device(target_id, node_id, false)
     }
@@ -780,6 +810,7 @@ impl DeckWeaverCore {
                                         a.icon_name.as_deref(),
                                         &a.name,
                                         Some(&a.key),
+                                        a.steam_app_id.as_deref(),
                                     )
                                 });
                                 app.map(|a| a.to_device())
@@ -856,9 +887,20 @@ impl DeckWeaverCore {
                                 s.needs_render()
                             })
                             .map(|(id, s)| {
-                                let max_icon_size = match s.config.action_type {
-                                    ActionType::Knob => KNOB_ICON_SIZE,
-                                    _ => (s.config.width as f32) * 0.5,
+                                let icon_sizing = match s.config.action_type {
+                                    ActionType::Knob => {
+                                        crate::action::IconSizing::Fit(KNOB_ICON_SIZE)
+                                    }
+                                    // The slider's icon is a faded backdrop covering the whole
+                                    // double-height fader rather than a badge on the key.
+                                    ActionType::Slider => crate::action::IconSizing::Cover {
+                                        width: s.config.width,
+                                        height: s.config.width * 2,
+                                        alpha: crate::render::SLIDER_ICON_ALPHA,
+                                    },
+                                    _ => {
+                                        crate::action::IconSizing::Fit(s.config.width as f32 * 0.5)
+                                    }
                                 };
                                 // Explicit user choice first, the app's own icon only as a
                                 // fallback, so setting a custom icon always overrides it.
@@ -870,7 +912,7 @@ impl DeckWeaverCore {
                                 let cached_icon = s.get_cached_icon(
                                     s.config.icon_png.as_deref(),
                                     icon_path,
-                                    max_icon_size,
+                                    icon_sizing,
                                 );
 
                                 let uses_knob_meter_cache = s.config.action_type
@@ -901,10 +943,28 @@ impl DeckWeaverCore {
                                     pipeweaver_available
                                 };
 
+                                // Tint the bar with the app's own icon, so a key reads as that
+                                // app at a glance. Only when nothing more specific applies: an
+                                // explicit volume_bar_color still wins in `accent_color`, and a
+                                // PipeWeaver device keeps whatever colour PipeWeaver assigned it.
+                                let mut device = s.device.clone();
+                                if is_app_action
+                                    && let Some(dev) = device.as_mut()
+                                    && dev.color.is_none()
+                                    && let Some((red, green, blue)) =
+                                        cached_icon.as_ref().and_then(|icon| icon.accent)
+                                {
+                                    dev.color = Some(crate::devices::DeviceColor {
+                                        red,
+                                        green,
+                                        blue,
+                                    });
+                                }
+
                                 (
                                     id.clone(),
                                     s.config.clone(),
-                                    s.device.clone(),
+                                    device,
                                     s.get_meter(),
                                     cached_icon,
                                     cached_knob_base,
@@ -963,7 +1023,13 @@ impl DeckWeaverCore {
                         };
 
                         let result = if !available {
-                            renderers.render_unavailable(&config)
+                            if is_app_action {
+                                // No sound server is a real fault, but the app actions should not
+                                // suddenly sprout a red cross across the deck for it either.
+                                renderers.render_idle(&config, "No audio server")
+                            } else {
+                                renderers.render_unavailable(&config)
+                            }
                         } else if let Some(ref dev) = device {
                             renderers.render_with_cached(
                                 &config,
@@ -978,7 +1044,13 @@ impl DeckWeaverCore {
                             // "nothing to show" rather than a state still being fetched.
                             && (is_app_action || status.read().is_some())
                         {
-                            renderers.render_unavailable(&config)
+                            if is_app_action {
+                                // Nothing playing is the resting state of a focus-following knob,
+                                // not a fault, so it says so rather than showing an error.
+                                renderers.render_idle(&config, "No sound playing")
+                            } else {
+                                renderers.render_unavailable(&config)
+                            }
                         } else {
                             renderers.render_loading(&config)
                         };
@@ -1097,6 +1169,17 @@ fn device_color(device: &Device) -> Option<(u8, u8, u8)> {
         .map(|color| (color.red, color.green, color.blue))
 }
 
+/// What the server currently says about the mix the active mute profile addresses.
+///
+/// Profile 0 is mix A and profile 1 is mix B on a source. A target has a single mute, and so does
+/// an app stream (which presents as a source without per-mix flags), so every profile reads the
+/// same flag there.
+fn live_mute_state(config: &ActionConfig, device: &Device) -> bool {
+    device
+        .source_muted_for_mix(config.mute_profile_index == 1)
+        .unwrap_or(device.is_muted)
+}
+
 fn knob_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -> RenderParams {
     let is_source = device_is_source(config, device);
 
@@ -1119,7 +1202,10 @@ fn knob_render_params(config: &ActionConfig, device: &Device, meter_value: u8) -
         source_volumes_linked: device.source_volumes_linked.unwrap_or(false),
         routed_to: config.routed_to.clone(),
         mute_profile: config.mute_profile_index,
-        mute_profile_muted: config.mute_profile_muted,
+        // The stored profile value is only what was last set from this key. Muting in PipeWeaver's
+        // own UI (or pavucontrol, for an app) leaves it stale, so the dial dims off what the server
+        // currently reports instead.
+        mute_profile_muted: live_mute_state(config, device),
         show_volume: config.show_volume,
     }
 }
@@ -1322,6 +1408,21 @@ impl Renderers {
             .or_insert_with(|| ButtonRenderer::new(width))
     }
 
+    /// Dimmed "nothing to control" state, used for app actions in place of the fault cross.
+    fn render_idle(
+        &mut self,
+        config: &ActionConfig,
+        message: &str,
+    ) -> Option<(Vec<u8>, u32, u32)> {
+        match config.action_type {
+            ActionType::Knob => self
+                .knob(config.width, config.height)
+                .render_idle_internal(message),
+            ActionType::Slider => self.slider(config.width).render_idle_internal(message),
+            ActionType::Button => self.button(config.width).render_idle_internal(message),
+        }
+    }
+
     fn render_unavailable(&mut self, config: &ActionConfig) -> Option<(Vec<u8>, u32, u32)> {
         match config.action_type {
             ActionType::Knob => self
@@ -1370,6 +1471,7 @@ impl Renderers {
                     &params,
                     config.is_top,
                     config.orientation == "horizontal",
+                    cached_icon,
                 )
             }
             ActionType::Button => {

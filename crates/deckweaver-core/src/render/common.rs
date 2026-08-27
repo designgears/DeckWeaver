@@ -430,7 +430,9 @@ pub fn blit_outline(pixmap: &mut Pixmap, mask: &RgbaImage, x: i32, y: i32, spec:
 pub fn decode_icon(png_data: &[u8], max_size: f32) -> Option<(RgbaImage, u32, u32)> {
     let img = image::load_from_memory(png_data).ok()?;
     let (iw, ih) = (img.width() as f32, img.height() as f32);
-    let scale = (max_size / iw).min(max_size / ih).min(1.0);
+    // Not clamped to 1.0, matching `ActionState::get_cached_icon`: a source smaller than the slot
+    // is scaled up here, in a single resample from the original.
+    let scale = (max_size / iw).min(max_size / ih);
     let (sw, sh) = ((iw * scale) as u32, (ih * scale) as u32);
 
     let resized = img

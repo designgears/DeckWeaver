@@ -9,6 +9,8 @@
 <body class="pi">
   <div id="status" class="status">Connecting…</div>
 
+  <div id="iconPickerMount"></div>
+
   <section class="section">
     <label class="field-label" for="device">PipeWeaver device</label>
     <select id="device"></select>
@@ -36,7 +38,6 @@
     initActionInspector({
       signedVolumeStep: true,
       showSourceMix: false,
-      showIconPicker: false,
       defaultVolumeStep: 5,
       minVolumeStep: -20,
       maxVolumeStep: 20,

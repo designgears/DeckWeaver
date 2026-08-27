@@ -73,11 +73,26 @@ impl ActionConfig {
     }
 }
 
+/// How an action's icon is fitted for its renderer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IconSizing {
+    /// Fit inside a square box of this size, preserving aspect. Knobs and buttons, where the
+    /// icon is a distinct element next to the other content.
+    Fit(f32),
+    /// Fill a `width` x `height` box exactly: scale preserving aspect, centre-crop the overflow,
+    /// and multiply the alpha down to `alpha`. Sliders, where the icon is a faded backdrop the
+    /// bar draws over.
+    Cover { width: u32, height: u32, alpha: f32 },
+}
+
 #[derive(Debug, Clone)]
 pub struct CachedIcon {
     pub rgba8: image::RgbaImage,
     pub width: u32,
     pub height: u32,
+    /// Colour lifted from the icon, used to tint the volume bar. Computed here so it is derived
+    /// once per icon rather than on every frame.
+    pub accent: Option<(u8, u8, u8)>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,7 +180,7 @@ impl ActionState {
         &self,
         png_data: Option<&[u8]>,
         icon_path: Option<&str>,
-        max_size: f32,
+        sizing: IconSizing,
     ) -> Option<CachedIcon> {
         let Some((icon_hash, png_data)) = self.resolve_icon_source(png_data, icon_path) else {
             *self.cached_icon.write() = None;
@@ -186,17 +201,62 @@ impl ActionState {
         };
 
         let (iw, ih) = (img.width() as f32, img.height() as f32);
-        let scale = (max_size / iw).min(max_size / ih).min(1.0);
-        let (sw, sh) = ((iw * scale) as u32, (ih * scale) as u32);
+        let cached = match sizing {
+            IconSizing::Fit(max_size) => {
+                // Not clamped to 1.0: a source smaller than the slot is scaled up here instead,
+                // which is still a single resample from the original rather than a second one.
+                let scale = (max_size / iw).min(max_size / ih);
+                let (sw, sh) = ((iw * scale) as u32, (ih * scale) as u32);
 
-        let resized = img
-            .resize(sw, sh, image::imageops::FilterType::Triangle)
-            .to_rgba8();
+                let resized = img
+                    .resize(sw, sh, image::imageops::FilterType::Triangle)
+                    .to_rgba8();
 
-        let cached = CachedIcon {
-            rgba8: resized,
-            width: sw,
-            height: sh,
+                let accent = crate::icon_loader::dominant_accent(&resized);
+                CachedIcon {
+                    rgba8: resized,
+                    width: sw,
+                    height: sh,
+                    accent,
+                }
+            }
+            IconSizing::Cover {
+                width,
+                height,
+                alpha,
+            } => {
+                // The larger ratio, so both dimensions are filled and the overflow on the other
+                // axis is cropped away from the middle — nothing is ever stretched.
+                let scale = (width as f32 / iw).max(height as f32 / ih);
+                let (sw, sh) = (
+                    ((iw * scale) as u32).max(width),
+                    ((ih * scale) as u32).max(height),
+                );
+                let resized = img
+                    .resize_exact(sw, sh, image::imageops::FilterType::Triangle)
+                    .to_rgba8();
+                let mut cropped = image::imageops::crop_imm(
+                    &resized,
+                    (sw - width) / 2,
+                    (sh - height) / 2,
+                    width,
+                    height,
+                )
+                .to_image();
+
+                // The accent has to come from the art at full strength: fading first would put
+                // every pixel below the sampler's alpha cutoff and lose the tint entirely.
+                let accent = crate::icon_loader::dominant_accent(&cropped);
+                for pixel in cropped.pixels_mut() {
+                    pixel[3] = (pixel[3] as f32 * alpha) as u8;
+                }
+                CachedIcon {
+                    rgba8: cropped,
+                    width,
+                    height,
+                    accent,
+                }
+            }
         };
 
         *self.cached_icon.write() = Some((icon_hash, cached.clone()));
@@ -219,7 +279,7 @@ impl ActionState {
         let icon_path = icon_path?;
         1u8.hash(&mut hasher);
         icon_path.hash(&mut hasher);
-        let png_data = crate::icon_loader::load_icon_to_png_bytes(icon_path)?;
+        let png_data = crate::icon_loader::load_icon_native_png_bytes(icon_path)?;
         Some((hasher.finish(), png_data))
     }
 

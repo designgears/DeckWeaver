@@ -83,6 +83,10 @@ pub struct AppStream {
     pub is_muted: bool,
     /// `application.icon_name`, when the app sets one. Usable as an XDG icon theme lookup.
     pub icon_name: Option<String>,
+    /// Steam app id when the streams belong to a Steam game, e.g. "2806050". Read from the game
+    /// process's environment. Steam games ship no desktop entry and usually no icon name, so this
+    /// is the only key that reaches the artwork Steam keeps for them.
+    pub steam_app_id: Option<String>,
     /// Human-readable name of the sink this app plays into — the PipeWeaver channel when one is
     /// in use. `None` while the sink list has not been read yet.
     pub routed_to: Option<String>,
@@ -132,14 +136,29 @@ fn pid_matches_binary(pid: u32, binary: Option<&str>) -> bool {
         // Nothing to check against; trust it rather than throwing away a usable pid.
         return true;
     };
-    let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) else {
-        return false;
-    };
-    let comm = comm.trim().to_lowercase();
     let binary = binary.to_lowercase();
-    // /proc/<pid>/comm is capped at 15 characters, so compare on that prefix.
-    let cut = comm.len().min(binary.len()).min(15);
-    cut > 0 && comm[..cut] == binary[..cut]
+
+    if let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+        let comm = comm.trim().to_lowercase();
+        // /proc/<pid>/comm is capped at 15 characters, so compare on that prefix.
+        let cut = comm.len().min(binary.len()).min(15);
+        if cut > 0 && comm[..cut] == binary[..cut] {
+            return true;
+        }
+    }
+
+    // Wine rewrites comm to the .exe it is running (Unreal games rename it again, to
+    // "game_UNREAL_GAM"), while the stream claims the ELF that was exec'd — "wine64-preloader".
+    // /proc/<pid>/exe still points at that ELF, so a valid host pid is recognisable there when
+    // comm is not. A sandboxed app's namespace pid still fails both checks: whatever host
+    // process wears that pid, its exe is a different binary or unreadable outright.
+    std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_lowercase())
+        })
+        .is_some_and(|exe| exe == binary)
 }
 
 /// Decide what a focus-following action controls, given what focus points at right now and what
@@ -532,6 +551,7 @@ struct RawStream {
     volume: u8,
     muted: bool,
     icon_name: Option<String>,
+    steam_app_id: Option<String>,
 }
 
 impl RawStream {
@@ -553,6 +573,12 @@ impl RawStream {
         let name = crate::icon_loader::find_desktop_name_for_app(&reported, binary.as_deref())
             .unwrap_or(reported);
 
+        let pid = props
+            .get_str("application.process.id")
+            .and_then(|p| p.trim().parse().ok())
+            .filter(|pid| pid_matches_binary(*pid, binary.as_deref()));
+        let steam_app_id = pid.and_then(steam_app_id_for_pid);
+
         // Prefer the binary: an app's display name can change with what it is playing (browsers
         // put the tab title in it on some sites), while the binary stays put.
         let key = binary
@@ -560,22 +586,65 @@ impl RawStream {
             .or_else(|| app_name.clone())
             .unwrap_or_else(|| name.clone())
             .to_lowercase();
+        // Every Proton game's binary is the wine loader, so keying on it would merge all running
+        // games into one app. The Steam app id is what tells them apart — and it matches the
+        // window class the compositor reports ("steam_app_2806050") as a welcome side effect.
+        let key = match &steam_app_id {
+            Some(id) if is_wine_loader(&key) => format!("steam_app_{id}"),
+            _ => key,
+        };
 
         Self {
             key,
             name,
             index: info.index,
             sink: info.sink,
-            pid: props
-                .get_str("application.process.id")
-                .and_then(|p| p.trim().parse().ok())
-                .filter(|pid| pid_matches_binary(*pid, binary.as_deref())),
+            pid,
             channels: info.volume.len(),
             volume: volume_to_percent(info.volume.avg()),
             muted: info.mute,
             icon_name: props.get_str("application.icon_name"),
+            steam_app_id,
         }
     }
+}
+
+/// True for the wine processes every Proton game runs as.
+fn is_wine_loader(binary: &str) -> bool {
+    matches!(binary, "wine-preloader" | "wine64-preloader" | "wine" | "wine64")
+}
+
+/// Steam app id from a process's environment, e.g. "2806050".
+///
+/// Steam exports `SteamAppId` to everything it launches, and it survives into the wine processes
+/// a Proton game actually plays audio from. Only readable for our own user's processes, which
+/// sink inputs always are. Cached because the poll loop rebuilds streams a few times a second
+/// and a process's environment is fixed at exec.
+fn steam_app_id_for_pid(pid: u32) -> Option<String> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<u32, Option<String>>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+
+    if let Ok(guard) = cache.lock()
+        && let Some(hit) = guard.get(&pid)
+    {
+        return hit.clone();
+    }
+
+    let found = std::fs::read(format!("/proc/{pid}/environ"))
+        .ok()
+        .and_then(|environ| {
+            environ
+                .split(|byte| *byte == 0)
+                .find_map(|entry| entry.strip_prefix(b"SteamAppId="))
+                .map(|value| String::from_utf8_lossy(value).into_owned())
+        })
+        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()));
+
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(pid, found.clone());
+    }
+    found
 }
 
 /// PipeWire reports the binary of an updated-in-place app as `"msedge (deleted)"`. Left alone that
@@ -649,6 +718,9 @@ fn aggregate_with_sinks(raw: Vec<RawStream>, sinks: &HashMap<u32, String>) -> Ve
                 if existing.icon_name.is_none() {
                     existing.icon_name = stream.icon_name;
                 }
+                if existing.steam_app_id.is_none() {
+                    existing.steam_app_id = stream.steam_app_id;
+                }
             }
             None => {
                 order.push(stream.key.clone());
@@ -663,6 +735,7 @@ fn aggregate_with_sinks(raw: Vec<RawStream>, sinks: &HashMap<u32, String>) -> Ve
                         volume: stream.volume,
                         is_muted: stream.muted,
                         icon_name: stream.icon_name,
+                        steam_app_id: stream.steam_app_id,
                         routed_to: sinks.get(&stream.sink).cloned(),
                     },
                 );
@@ -918,6 +991,7 @@ mod tests {
             volume,
             muted,
             icon_name: None,
+            steam_app_id: None,
         }
     }
 

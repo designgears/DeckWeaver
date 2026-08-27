@@ -87,6 +87,33 @@ fn render_slider_sheet(dir: &str) {
     let backgrounds = backgrounds(size, size * 2);
     let states = slider_states();
 
+    // Same treatment an app action's icon gets: cover-cropped over the double-height stack and
+    // faded, so it reads as a backdrop under the fader.
+    let icon_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/audio-lines.svg");
+    let icon = load_icon_to_png_bytes(icon_path).and_then(|png| {
+        let img = image::load_from_memory(&png).ok()?;
+        let (bw, bh) = (size, size * 2);
+        let scale = (bw as f32 / img.width() as f32).max(bh as f32 / img.height() as f32);
+        let (sw, sh) = (
+            ((img.width() as f32 * scale) as u32).max(bw),
+            ((img.height() as f32 * scale) as u32).max(bh),
+        );
+        let resized = img
+            .resize_exact(sw, sh, image::imageops::FilterType::Triangle)
+            .to_rgba8();
+        let mut rgba8 =
+            image::imageops::crop_imm(&resized, (sw - bw) / 2, (sh - bh) / 2, bw, bh).to_image();
+        for pixel in rgba8.pixels_mut() {
+            pixel[3] = (pixel[3] as f32 * deckweaver_core::SLIDER_ICON_ALPHA) as u8;
+        }
+        Some(deckweaver_core::CachedIcon {
+            rgba8,
+            width: bw,
+            height: bh,
+            accent: None,
+        })
+    });
+
     let sheet_w = backgrounds.len() as u32 * (size + GUTTER) + GUTTER;
     let sheet_h = states.len() as u32 * (size * 2 + GUTTER) + GUTTER;
     let mut sheet = RgbaImage::from_pixel(sheet_w, sheet_h, Rgba([24, 24, 27, 255]));
@@ -95,7 +122,9 @@ fn render_slider_sheet(dir: &str) {
         for (col, (_, background)) in backgrounds.iter().enumerate() {
             let mut cell = background.clone();
             for (half, is_top) in [(0u32, true), (1, false)] {
-                let Some((rgba, w, h)) = renderer.render_internal_png(params, is_top, false) else {
+                let Some((rgba, w, h)) =
+                    renderer.render_internal_png(params, is_top, false, icon.as_ref())
+                else {
                     eprintln!("slider render failed for {label}");
                     continue;
                 };

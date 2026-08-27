@@ -54,6 +54,32 @@ impl KnobRenderer {
         pixmap_to_rgba(&create_unavailable_pixmap(self.width, self.height)?)
     }
 
+    /// A dimmed strip with an explanatory line, for an app action with nothing to control.
+    ///
+    /// The red cross means "something is wrong". A focus-following knob sitting idle because
+    /// nothing happens to be playing is the normal resting state, not a fault, so it reads as a
+    /// dimmed dial with the reason spelled out instead.
+    pub fn render_idle_internal(&self, message: &str) -> Option<(Vec<u8>, u32, u32)> {
+        let mut pixmap = create_filled_pixmap(self.width, self.height, theme::IDLE_BG)?;
+
+        let width = self.width as f32 - theme::PAD * 2.0;
+        let label = truncate_to_width(message, width, theme::NAME_SIZE);
+        draw_text(
+            &mut pixmap,
+            &label,
+            Rect::new(
+                theme::PAD,
+                (self.height as f32 - theme::NAME_SIZE) * 0.5,
+                width,
+                theme::NAME_SIZE * 1.4,
+                0.0,
+            ),
+            &TextStyle::new(theme::NAME_SIZE, theme::TEXT_IDLE, TextAlign::Center),
+        );
+
+        pixmap_to_rgba(&pixmap)
+    }
+
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
         pixmap_to_rgba(&create_filled_pixmap(
             self.width,
@@ -232,7 +258,7 @@ impl KnobRenderer {
         // piece of routing state that is both real and not visible anywhere else on the strip.
         if let Some(channel) = params.routed_to.as_deref() {
             let width = self.width as f32 - theme::PAD * 2.0;
-            let label = truncate_to_width(channel, theme::LABEL_SIZE, width - theme::PAD * 2.0);
+            let label = truncate_to_width(channel, width - theme::PAD * 2.0, theme::LABEL_SIZE);
             draw_chip(
                 pixmap,
                 theme::PAD,

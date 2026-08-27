@@ -8,6 +8,20 @@ const DEFAULT_ICON_SIZE: u32 = 200;
 const MIN_ICON_SIZE: u32 = 200;
 
 pub fn load_icon_to_png_bytes(path: &str) -> Option<Vec<u8>> {
+    load_icon_inner(path, true)
+}
+
+/// Same, but leaves a raster icon at its own resolution.
+///
+/// The renderer resizes to the slot size itself, so pre-scaling here only inserts a second
+/// resample. Going 48px up to 200 and straight back down to 72 turns a small icon to mush, and it
+/// shows most on a button, where the icon is drawn at twice the size a knob draws it. One resample
+/// from the original is always sharper than two.
+pub fn load_icon_native_png_bytes(path: &str) -> Option<Vec<u8>> {
+    load_icon_inner(path, false)
+}
+
+fn load_icon_inner(path: &str, upscale_small: bool) -> Option<Vec<u8>> {
     let path_obj = Path::new(path);
 
     if !path_obj.exists() {
@@ -20,10 +34,12 @@ pub fn load_icon_to_png_bytes(path: &str) -> Option<Vec<u8>> {
         .map(|ext| ext.eq_ignore_ascii_case("svg"))
         .unwrap_or(false)
     {
+        // Vector art has no native pixel size; rasterising at a generous fixed size is real
+        // detail rather than invented, so it is left alone.
         return load_svg_to_png(path);
     }
 
-    load_image_to_png(path)
+    load_image_to_png(path, upscale_small)
 }
 
 pub fn svg_data_to_png_bytes(svg_data: &[u8]) -> Option<Vec<u8>> {
@@ -81,7 +97,7 @@ fn load_svg_to_png(path: &str) -> Option<Vec<u8>> {
     svg_data_to_png_bytes(&svg_data)
 }
 
-fn load_image_to_png(path: &str) -> Option<Vec<u8>> {
+fn load_image_to_png(path: &str, upscale_small: bool) -> Option<Vec<u8>> {
     let img = match image::open(path) {
         Ok(img) => img,
         Err(e) => {
@@ -94,7 +110,7 @@ fn load_image_to_png(path: &str) -> Option<Vec<u8>> {
     let (width, height) = rgba_img.dimensions();
     let max_dim = width.max(height);
 
-    let final_img = if max_dim < MIN_ICON_SIZE {
+    let final_img = if upscale_small && max_dim < MIN_ICON_SIZE {
         let scale = MIN_ICON_SIZE as f32 / max_dim as f32;
         let new_width = (width as f32 * scale) as u32;
         let new_height = (height as f32 * scale) as u32;
@@ -330,6 +346,7 @@ pub fn find_icon_for_app(
     icon_name: Option<&str>,
     app_name: &str,
     binary: Option<&str>,
+    steam_app_id: Option<&str>,
 ) -> Option<String> {
     // The render loop asks once per frame per action; walking the icon and application
     // directories at that rate would be gratuitous. Results are stable for a session.
@@ -337,10 +354,11 @@ pub fn find_icon_for_app(
         std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let cache_key = format!(
-        "{}\u{1}{}\u{1}{}",
+        "{}\u{1}{}\u{1}{}\u{1}{}",
         icon_name.unwrap_or_default(),
         app_name,
-        binary.unwrap_or_default()
+        binary.unwrap_or_default(),
+        steam_app_id.unwrap_or_default()
     );
 
     if let Ok(guard) = cache.lock()
@@ -353,6 +371,7 @@ pub fn find_icon_for_app(
     // (Vesktop advertises "chromium-browser"), and the entry is the one thing it ships to describe
     // itself accurately. `application.icon_name` is the fallback for apps with no entry at all.
     let resolved = icon_from_desktop_entry(app_name, binary)
+        .or_else(|| steam_app_id.and_then(steam_artwork))
         .or_else(|| icon_name.and_then(find_icon_by_name))
         // Last resort: some apps do use their binary as the icon name.
         .or_else(|| binary.and_then(find_icon_by_name));
@@ -361,6 +380,75 @@ pub fn find_icon_for_app(
         guard.insert(cache_key, resolved.clone());
     }
     resolved
+}
+
+/// Artwork Steam keeps for an installed app, best first.
+///
+/// Steam games ship no desktop entry and set no `application.icon_name`, so without this they
+/// render iconless. Three sources, in order of how well they read on a key:
+///
+/// 1. `steam_icon_<appid>` in the icon theme — only exists when the user made a desktop
+///    shortcut, but then it is a proper square icon at up to 256px.
+/// 2. The library capsule (portrait box art). Not square, but the renderer letterboxes it, and
+///    at 300x450 it stays sharp where the actual icon would not.
+/// 3. The icon Steam itself shows in lists — typically 32px, legible but soft when scaled up.
+fn steam_artwork(app_id: &str) -> Option<String> {
+    if let Some(icon) = find_icon_by_name(&format!("steam_icon_{app_id}")) {
+        return Some(icon);
+    }
+
+    let mut icon_fallback = None;
+    for root in steam_roots() {
+        let cache = root.join("appcache/librarycache");
+
+        // Current layout: one directory per app, art in hash-named subdirectories with stable
+        // filenames, and the list icon as a hash-named jpg at the top level.
+        let app_dir = cache.join(app_id);
+        if let Ok(entries) = std::fs::read_dir(&app_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let capsule = path.join("library_capsule.jpg");
+                    if capsule.is_file() {
+                        return Some(capsule.to_string_lossy().into_owned());
+                    }
+                } else if icon_fallback.is_none()
+                    && path.extension().is_some_and(|e| e == "jpg")
+                {
+                    icon_fallback = Some(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+
+        // Pre-2024 layout: flat files named by appid.
+        for name in [
+            format!("{app_id}_library_600x900.jpg"),
+            format!("{app_id}_icon.jpg"),
+        ] {
+            let path = cache.join(name);
+            if path.is_file() {
+                return Some(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    icon_fallback
+}
+
+/// Steam installation roots worth checking: native, the classic `~/.steam` link, and Flatpak.
+fn steam_roots() -> Vec<std::path::PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let data_home =
+        std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{home}/.local/share"));
+
+    let mut roots = vec![
+        std::path::PathBuf::from(format!("{data_home}/Steam")),
+        std::path::PathBuf::from(format!("{home}/.steam/steam")),
+        std::path::PathBuf::from(format!(
+            "{home}/.var/app/com.valvesoftware.Steam/.local/share/Steam"
+        )),
+    ];
+    roots.retain(|root| root.is_dir());
+    roots
 }
 
 /// Find the `.desktop` entry belonging to this app and resolve its `Icon=`.
@@ -620,5 +708,166 @@ StartupWMClass=firefox
     fn missing_and_empty_keys_are_none() {
         assert!(desktop_key(ENTRY, "NoSuchKey").is_none());
         assert!(desktop_key("[Desktop Entry]\nIcon=\n", "Icon").is_none());
+    }
+}
+
+/// Pick a colour from an icon to tint the volume bar with.
+///
+/// Not a mean of all pixels: averaging an icon returns mud, because icons are mostly transparent
+/// padding plus black or white detail. Pixels are bucketed by coarse colour, and the heaviest
+/// bucket wins — so the result is the icon's brand colour rather than whatever covers the most
+/// area. A white glyph on a coloured field gives the field's colour, not white.
+///
+/// Weighting is by *chroma*, not saturation. Saturation is chroma over brightness, which rates a
+/// near-black deep colour just as highly as a vivid one — Steam's navy scores 0.87 saturation
+/// while being far too dark to read on the bar. Chroma rises with both colourfulness and
+/// brightness, so the vivid part of an icon outvotes its shadows and the colour picked is one
+/// that needs no artificial lifting to be legible.
+pub fn dominant_accent(image: &image::RgbaImage) -> Option<(u8, u8, u8)> {
+    // Two passes: the first ignores washed-out pixels entirely, and if an icon turns out to be
+    // wholly desaturated (a greyscale logo) the second accepts them so it still gets a tint.
+    for min_saturation in [0.35_f32, 0.12, 0.0] {
+        if let Some(colour) = accent_pass(image, min_saturation) {
+            return Some(colour);
+        }
+    }
+    None
+}
+
+fn accent_pass(image: &image::RgbaImage, min_saturation: f32) -> Option<(u8, u8, u8)> {
+    // 4 bits per channel: coarse enough that shading variations of one colour land together,
+    // fine enough to keep genuinely different colours apart.
+    let mut buckets: HashMap<(u8, u8, u8), (f32, f64, f64, f64)> = HashMap::new();
+
+    for pixel in image.pixels() {
+        let [r, g, b, a] = pixel.0;
+        if a < 128 {
+            continue;
+        }
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        // Too dark to tell a colour from, or too pale to read against the bar's track.
+        if max < 40 {
+            continue;
+        }
+        let chroma = (max - min) as f32;
+        // Saturation still decides *whether* a pixel counts as coloured at all; it is the right
+        // test for "is this grey?" even though it is the wrong weight.
+        let saturation = chroma / max as f32;
+        if saturation < min_saturation {
+            continue;
+        }
+
+        let key = (r >> 4, g >> 4, b >> 4);
+        let entry = buckets.entry(key).or_insert((0.0, 0.0, 0.0, 0.0));
+        // Chroma favours bright vivid pixels over dark ones of the same hue. The floor keeps the
+        // greyscale fallback pass working, where every pixel has zero chroma by definition.
+        let weight = (chroma / 255.0).max(0.02);
+        entry.0 += weight;
+        entry.1 += r as f64 * weight as f64;
+        entry.2 += g as f64 * weight as f64;
+        entry.3 += b as f64 * weight as f64;
+    }
+
+    let (_, (weight, r, g, b)) = buckets
+        .into_iter()
+        .max_by(|a, b| a.1 .0.total_cmp(&b.1 .0))?;
+    if weight <= 0.0 {
+        return None;
+    }
+
+    Some(brighten_for_bar((
+        (r / weight as f64) as u8,
+        (g / weight as f64) as u8,
+        (b / weight as f64) as u8,
+    )))
+}
+
+/// Lift a colour that would disappear against the bar's dark track.
+///
+/// Icons carry plenty of deep colours that are legible on a white page but turn to mud against the
+/// bar's dark track — Steam's navy is the obvious one. Anything below the floor is scaled up with
+/// its hue preserved, so it stays recognisably the app's colour while becoming readable.
+fn brighten_for_bar((r, g, b): (u8, u8, u8)) -> (u8, u8, u8) {
+    const FLOOR: u16 = 155;
+    let max = r.max(g).max(b) as u16;
+    if max >= FLOOR || max == 0 {
+        return (r, g, b);
+    }
+    let scale = FLOOR as f32 / max as f32;
+    let lift = |c: u8| ((c as f32 * scale).round() as u16).min(255) as u8;
+    (lift(r), lift(g), lift(b))
+}
+
+#[cfg(test)]
+mod accent_tests {
+    use super::*;
+    use image::{Rgba, RgbaImage};
+
+    fn image_from(pixels: &[(u8, u8, u8, u8)]) -> RgbaImage {
+        let mut img = RgbaImage::new(pixels.len() as u32, 1);
+        for (x, p) in pixels.iter().enumerate() {
+            img.put_pixel(x as u32, 0, Rgba([p.0, p.1, p.2, p.3]));
+        }
+        img
+    }
+
+    /// The shape most app icons have: a coloured mark on transparent padding.
+    #[test]
+    fn a_coloured_mark_on_transparency_wins() {
+        let img = image_from(&[
+            (0, 0, 0, 0),
+            (0, 0, 0, 0),
+            (220, 40, 40, 255),
+            (220, 40, 40, 255),
+        ]);
+        let (r, g, b) = dominant_accent(&img).expect("an accent");
+        assert!(r > 180 && g < 90 && b < 90, "expected red, got {r},{g},{b}");
+    }
+
+    /// A white glyph over a coloured field must yield the field, not the glyph — averaging or
+    /// counting by area would return white here.
+    #[test]
+    fn a_white_glyph_does_not_beat_the_colour_behind_it() {
+        let mut pixels = vec![(255, 255, 255, 255); 6];
+        pixels.extend(vec![(30, 100, 220, 255); 4]);
+        let (r, g, b) = dominant_accent(&image_from(&pixels)).expect("an accent");
+        assert!(b > 150 && r < 100, "expected blue, got {r},{g},{b}");
+    }
+
+    /// Given a dark and a bright shade of the same hue, the bright one should be sampled. Picking
+    /// the dark one and lifting it afterwards shifts the hue and is less faithful to the icon.
+    /// Saturation-weighting got this backwards: Steam's navy rates 0.87 saturation.
+    #[test]
+    fn a_bright_shade_beats_a_dark_shade_of_the_same_hue() {
+        // Deliberately more dark pixels than bright, so area alone would pick the dark shade.
+        let mut pixels = vec![(14, 48, 110, 255); 6];
+        pixels.extend(vec![(60, 150, 240, 255); 4]);
+        let (_, g, b) = dominant_accent(&image_from(&pixels)).expect("an accent");
+        assert!(
+            g > 100 && b > 200,
+            "expected the bright blue to win, got g={g} b={b}"
+        );
+    }
+
+    /// A deep colour that is genuinely the only one present still has to be lifted, or it vanishes
+    /// against the bar's dark track.
+    #[test]
+    fn very_dark_colours_are_lifted_to_stay_visible() {
+        let img = image_from(&[(0, 0, 60, 255); 4]);
+        let (_, _, b) = dominant_accent(&img).expect("an accent");
+        assert!(b >= 150, "expected the blue to be lifted clear of the track, got {b}");
+    }
+
+    /// A greyscale logo should still tint rather than falling back to the default.
+    #[test]
+    fn a_greyscale_icon_still_produces_something() {
+        let img = image_from(&[(180, 180, 180, 255); 4]);
+        assert!(dominant_accent(&img).is_some());
+    }
+
+    #[test]
+    fn a_fully_transparent_icon_has_no_accent() {
+        let img = image_from(&[(255, 0, 0, 0); 4]);
+        assert!(dominant_accent(&img).is_none());
     }
 }

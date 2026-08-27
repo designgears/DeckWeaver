@@ -954,14 +954,17 @@ class KnobAction(BaseAction):
 
     def _handle_touchscreen_single_tap(self):
         """Cycle to the next mute profile (P1 -> P2 -> P3 -> P4 -> P1 ...)"""
+        # Only selects which mix the press addresses. Pushing the stored value onto the new mix
+        # here would clobber a mute the user made in PipeWeaver's own UI.
         self._mute_profile_index = (self._mute_profile_index + 1) % self.MUTE_PROFILE_COUNT
-        self._apply_mute_profile()
         self._persist_settings(mute_profile_index=self._mute_profile_index)
+        self._update_config()
 
-    def _apply_mute_profile(self):
-        """Apply the active mute profile via the Rust core."""
-        config = self._build_config()
-        self._core.apply_mute_profile(config)
+    def _toggle_mute_profile(self):
+        """Flip the active profile's mute against the live server state, then remember it."""
+        muted = self._core.toggle_mute_profile(self._build_config())
+        if muted is not None:
+            self._save_mute_for_profile(muted)
 
     def _save_mute_for_profile(self, muted: bool):
         """Save a mute state to the active profile and persist."""
@@ -1023,9 +1026,7 @@ class KnobAction(BaseAction):
         elif event == Input.Dial.Events.SHORT_UP:
             # Toggle the active profile and apply to the selected mix.
             if self._device_id and self._mute_profile_index < len(self._mute_profile_data):
-                current = self._mute_profile_data[self._mute_profile_index]
-                self._save_mute_for_profile(not current)
-                self._apply_mute_profile()
+                self._toggle_mute_profile()
             self._update_config()
         elif event == Input.Dial.Events.SHORT_TOUCH_PRESS:
             self._handle_touchscreen_short_press(data)
