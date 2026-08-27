@@ -448,7 +448,7 @@ impl DeckWeaverCore {
         }
     }
 
-    /// Flip the mute of the mix the active profile addresses.
+    /// Flip the active mute profile.
     ///
     /// Works from what the server currently reports rather than the value stored in the action,
     /// so a mute made in PipeWeaver's own UI is undone by the next press instead of being
@@ -1169,11 +1169,13 @@ fn device_color(device: &Device) -> Option<(u8, u8, u8)> {
         .map(|color| (color.red, color.green, color.blue))
 }
 
-/// What the server currently says about the mix the active mute profile addresses.
+/// What the server currently says about the active mute profile.
 ///
-/// Profile 0 is mix A and profile 1 is mix B on a source. A target has a single mute, and so does
-/// an app stream (which presents as a source without per-mix flags), so every profile reads the
-/// same flag there.
+/// A PipeWeaver source has two mute profiles (its "Mute 1" / "Mute 2" buttons, `TargetA` and
+/// `TargetB` on the wire), each muting whichever targets it is configured for; the `mix_a` /
+/// `mix_b` field names on [`Device`] are historical and refer to those, not to the volume mixes.
+/// A target has a single mute, and so does an app stream (which presents as a source without
+/// per-profile flags), so every profile reads the same flag there.
 fn live_mute_state(config: &ActionConfig, device: &Device) -> bool {
     device
         .source_muted_for_mix(config.mute_profile_index == 1)

@@ -12,6 +12,52 @@ use crate::shared::{build_config_for_instance, core, update_instance, ActionSett
 
 const MUTE_PROFILE_COUNT: u8 = 2;
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(275);
+/// Holding the dial this long cycles the mute profile, right then, without waiting for the
+/// release. OpenDeck does not forward touch-strip taps, so the dial has to carry the gesture the
+/// strip carries on StreamController.
+const LONG_PRESS: Duration = Duration::from_millis(500);
+
+/// Timers armed by a dial press. An entry is present only while the press is still short: the
+/// timer removes it when it fires, and the release removes it when it cancels the timer.
+static DIAL_HOLD_TIMERS: Lazy<Mutex<HashMap<String, JoinHandle<()>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub fn handle_dial_down(instance: &Instance, settings: ActionSettings) {
+    let id = instance.instance_id.to_string();
+    let task_id = id.clone();
+    let task = tokio::spawn(async move {
+        tokio::time::sleep(LONG_PRESS).await;
+        // Removing our own entry is what tells the release it has nothing left to do.
+        if DIAL_HOLD_TIMERS.lock().remove(&task_id).is_none() {
+            return;
+        }
+        let Some(instance) = openaction::get_instance(task_id.clone()).await else {
+            debug!("DeckWeaver knob hold dropped: instance {} gone", task_id);
+            return;
+        };
+        debug!("DeckWeaver knob long press on {}", task_id);
+        let _ = cycle_mute_profile(&instance, settings).await;
+    });
+    if let Some(previous) = DIAL_HOLD_TIMERS.lock().insert(id, task) {
+        previous.abort();
+    }
+}
+
+/// A release before the hold timer fires is a short press, which toggles the active profile's
+/// mute. After the timer has fired the hold already did its job and the release is ignored.
+pub async fn handle_dial_up(
+    instance: &Instance,
+    settings: ActionSettings,
+) -> openaction::OpenActionResult<()> {
+    let Some(timer) = DIAL_HOLD_TIMERS
+        .lock()
+        .remove(&instance.instance_id.to_string())
+    else {
+        return Ok(());
+    };
+    timer.abort();
+    toggle_active_profile_mute(instance, settings).await
+}
 
 struct TouchTapState {
     pending: bool,
@@ -123,8 +169,8 @@ pub async fn cycle_mute_profile(
     instance: &Instance,
     mut settings: ActionSettings,
 ) -> openaction::OpenActionResult<()> {
-    // Only selects which mix the press addresses. Pushing the stored value onto the new mix here
-    // would clobber a mute the user made in PipeWeaver's own UI.
+    // Only selects which profile the press addresses. Pushing the stored value onto the new
+    // profile here would clobber a mute the user made in PipeWeaver's own UI.
     settings.mute_profile_index = (settings.mute_profile_index + 1) % MUTE_PROFILE_COUNT;
     instance.set_settings(&settings).await?;
     update_instance(instance, ActionType::Knob, &settings);

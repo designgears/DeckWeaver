@@ -1,7 +1,7 @@
 use log::info;
 use openaction::*;
 
-use crate::knob_touch::{handle_touch_press, toggle_active_profile_mute};
+use crate::knob_touch::{handle_dial_down, handle_dial_up, handle_touch_press};
 use crate::shared::{
     dimensions_for_instance, register_instance, unregister_instance, update_instance,
     ActionSettings,
@@ -78,6 +78,18 @@ impl Action for KnobAction {
         Ok(())
     }
 
+    async fn dial_down(
+        &self,
+        instance: &Instance,
+        settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
+        if settings.device_id.is_none() {
+            return Ok(());
+        }
+        handle_dial_down(instance, settings.clone());
+        Ok(())
+    }
+
     async fn dial_up(
         &self,
         instance: &Instance,
@@ -86,7 +98,7 @@ impl Action for KnobAction {
         if settings.device_id.is_none() {
             return Ok(());
         }
-        toggle_active_profile_mute(instance, settings.clone()).await
+        handle_dial_up(instance, settings.clone()).await
     }
 
     async fn touch_tap(

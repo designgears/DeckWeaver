@@ -954,8 +954,8 @@ class KnobAction(BaseAction):
 
     def _handle_touchscreen_single_tap(self):
         """Cycle to the next mute profile (P1 -> P2 -> P3 -> P4 -> P1 ...)"""
-        # Only selects which mix the press addresses. Pushing the stored value onto the new mix
-        # here would clobber a mute the user made in PipeWeaver's own UI.
+        # Only selects which profile the press addresses. Pushing the stored value onto the new
+        # profile here would clobber a mute the user made in PipeWeaver's own UI.
         self._mute_profile_index = (self._mute_profile_index + 1) % self.MUTE_PROFILE_COUNT
         self._persist_settings(mute_profile_index=self._mute_profile_index)
         self._update_config()
