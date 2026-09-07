@@ -24,9 +24,8 @@ impl SliderRenderer {
         params: &RenderParams,
         is_top: bool,
         is_horizontal: bool,
-        cached_icon: Option<&crate::action::CachedIcon>,
     ) -> Option<(Vec<u8>, u32, u32)> {
-        pixmap_to_rgba(&self.render_internal(params, is_top, is_horizontal, cached_icon)?)
+        pixmap_to_rgba(&self.render_internal(params, is_top, is_horizontal)?)
     }
 
     /// Dimmed placeholder with a reason, used instead of the fault cross when an app action simply
@@ -59,7 +58,7 @@ impl SliderRenderer {
 
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
         let params = RenderParams::default();
-        pixmap_to_rgba(&self.render_internal(&params, true, false, None)?)
+        pixmap_to_rgba(&self.render_internal(&params, true, false)?)
     }
 
     fn render_internal(
@@ -67,19 +66,9 @@ impl SliderRenderer {
         params: &RenderParams,
         is_top: bool,
         is_horizontal: bool,
-        cached_icon: Option<&crate::action::CachedIcon>,
     ) -> Option<Pixmap> {
         let mut full = Pixmap::new(self.button_size, self.button_size * 2)?;
         fill_background(&mut full, COLOR_TRANSPARENT);
-
-        // The app's art as a faded backdrop under the whole fader. Pre-cropped to cover the
-        // double-height stack (`IconSizing::Cover`), so a stacked pair of keys shows the two
-        // halves of one continuous image, the same way the bar splits.
-        if let Some(icon) = cached_icon {
-            let x = (self.button_size as i32 - icon.width as i32) / 2;
-            let y = (self.button_size as i32 * 2 - icon.height as i32) / 2;
-            blit_rgba8(&mut full, &icon.rgba8, x, y);
-        }
 
         self.draw_slider_stack(&mut full, params);
         self.render_meter_overlay(&mut full, params);

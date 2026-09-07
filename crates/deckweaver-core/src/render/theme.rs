@@ -73,9 +73,6 @@ pub const SLIDER_END_INSET_RATIO: f32 = 0.11;
 pub const SLIDER_METER_WIDTH_RATIO: f32 = 0.34;
 /// How far the meter lane stops short of each end of the bar, as a fraction of the bar width.
 pub const SLIDER_METER_INSET_RATIO: f32 = 0.28;
-/// Opacity of the app art behind the bar: faint enough to stay a backdrop, strong enough to
-/// still be recognisable at a glance.
-pub const SLIDER_ICON_ALPHA: f32 = 0.4;
 
 // ---------------------------------------------------------------------------
 // Layout — tuned for the 200x100 encoder zone

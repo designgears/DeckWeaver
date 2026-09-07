@@ -10,7 +10,7 @@ mod icon_loader;
 mod pulse;
 mod render;
 
-pub use action::{ActionConfig, ActionState, ActionType, CachedBaseRender, CachedIcon, IconSizing};
+pub use action::{ActionConfig, ActionState, ActionType, CachedBaseRender, CachedIcon};
 pub use config::{mute_profile_muted, populate_common_fields};
 pub use core::{DeckWeaverCore, PendingUpdate, DEFAULT_PORT, VERSION};
 pub use devices::{Device, DeviceColor, DeviceType, HardwareDevice, Status};
@@ -27,4 +27,4 @@ pub use pulse::{
     app_key_from_device_id, is_focused_device_id, AppStream, PulseBackend, APP_DEVICE_PREFIX,
     FOCUSED_APP_KEY, FOCUSED_DEVICE_ID,
 };
-pub use render::{ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer, SLIDER_ICON_ALPHA};
+pub use render::{ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer};

@@ -887,20 +887,9 @@ impl DeckWeaverCore {
                                 s.needs_render()
                             })
                             .map(|(id, s)| {
-                                let icon_sizing = match s.config.action_type {
-                                    ActionType::Knob => {
-                                        crate::action::IconSizing::Fit(KNOB_ICON_SIZE)
-                                    }
-                                    // The slider's icon is a faded backdrop covering the whole
-                                    // double-height fader rather than a badge on the key.
-                                    ActionType::Slider => crate::action::IconSizing::Cover {
-                                        width: s.config.width,
-                                        height: s.config.width * 2,
-                                        alpha: crate::render::SLIDER_ICON_ALPHA,
-                                    },
-                                    _ => {
-                                        crate::action::IconSizing::Fit(s.config.width as f32 * 0.5)
-                                    }
+                                let max_icon_size = match s.config.action_type {
+                                    ActionType::Knob => KNOB_ICON_SIZE,
+                                    _ => (s.config.width as f32) * 0.5,
                                 };
                                 // Explicit user choice first, the app's own icon only as a
                                 // fallback, so setting a custom icon always overrides it.
@@ -912,7 +901,7 @@ impl DeckWeaverCore {
                                 let cached_icon = s.get_cached_icon(
                                     s.config.icon_png.as_deref(),
                                     icon_path,
-                                    icon_sizing,
+                                    max_icon_size,
                                 );
 
                                 let uses_knob_meter_cache = s.config.action_type
@@ -1473,7 +1462,6 @@ impl Renderers {
                     &params,
                     config.is_top,
                     config.orientation == "horizontal",
-                    cached_icon,
                 )
             }
             ActionType::Button => {
