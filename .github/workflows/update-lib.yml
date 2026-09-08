@@ -44,6 +44,10 @@ jobs:
 
       ## Push the file to the repo
       - name: Commit updated files
+        # The message goes through the environment rather than being pasted into the script:
+        # interpolating it directly breaks on any quote in the commit body.
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -53,7 +57,7 @@ jobs:
           # Skip commit if nothing changed
           git diff --cached --quiet && exit 0
 
-          git commit -m "${{ github.event.head_commit.message }}"
+          git commit -m "$MESSAGE"
           git push
 
       ## Package both plugins for the release
