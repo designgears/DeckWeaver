@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 authors = ["DesignGears"]
 license = "GPL-2.0-only"

@@ -779,6 +779,15 @@ impl DeckWeaverCore {
 
                     let action_ids: Vec<String> = {
                         let guard = actions.read();
+                        // Peak monitors only run while an app action is actually showing meters.
+                        let wants_app_meters = guard.values().any(|s| {
+                            s.config.meters_enabled
+                                && s.config
+                                    .device_id
+                                    .as_deref()
+                                    .is_some_and(|id| crate::pulse::app_key_from_device_id(id).is_some())
+                        });
+                        pulse.set_metering(wants_app_meters);
                         guard.keys().cloned().collect()
                     };
 
@@ -833,18 +842,24 @@ impl DeckWeaverCore {
                                     })
                             };
 
-                            // Meter levels come off the PipeWeaver feed, which knows nothing about
-                            // app streams, so app actions render with an idle meter lane rather
-                            // than whatever a same-named key happened to leave behind.
-                            if state.config.meters_enabled
-                                && crate::pulse::app_key_from_device_id(device_id).is_none()
-                            {
+                            // PipeWeaver devices take their level from the PipeWeaver meter
+                            // feed; app streams take theirs from the PulseAudio peak monitors,
+                            // resolved through the same app the key is currently controlling.
+                            if !state.config.meters_enabled {
+                                state.set_meter(0);
+                            } else if crate::pulse::app_key_from_device_id(device_id).is_some() {
+                                let level = state
+                                    .device
+                                    .as_ref()
+                                    .and_then(|d| crate::pulse::app_key_from_device_id(&d.id))
+                                    .map(|key| pulse.peak(key))
+                                    .unwrap_or(0);
+                                state.set_meter(level);
+                            } else {
                                 let meter_guard = meter_data.read();
                                 if let Some(&meter) = meter_guard.get(device_id) {
                                     state.set_meter(meter);
                                 }
-                            } else {
-                                state.set_meter(0);
                             }
 
                             if let Some(name) = state.device.as_ref().map(|d| d.name.as_str()) {

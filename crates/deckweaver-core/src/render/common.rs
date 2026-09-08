@@ -27,6 +27,18 @@ impl Rgba {
         Self::new(255 - self.r, 255 - self.g, 255 - self.b, self.a)
     }
 
+    /// Relative luminance, 0.0 black to 1.0 white, ignoring alpha.
+    pub fn luminance(self) -> f32 {
+        (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
+    }
+
+    /// True for a grey with no real hue: black, white and everything between.
+    pub fn is_neutral(self) -> bool {
+        let max = self.r.max(self.g).max(self.b);
+        let min = self.r.min(self.g).min(self.b);
+        max - min <= 12
+    }
+
     pub fn blend(self, other: Self, amount: f32) -> Self {
         let t = amount.clamp(0.0, 1.0);
         let lerp = |from: u8, to: u8| from as f32 + (to as f32 - from as f32) * t;
@@ -114,6 +126,17 @@ impl RenderParams {
 
         if self.meter_invert {
             color = color.invert();
+        }
+
+        // A neutral lane (the default, or a plain black/white pick, either way round) has no
+        // fixed answer: an icon-derived accent can be white, and a white lane vanishes into it.
+        // So neutral means "contrast with the fill", light on a dark fill and dark on a light one.
+        if color.is_neutral() {
+            color = if self.accent_color().luminance() > 0.75 {
+                theme::METER_DEFAULT.invert()
+            } else {
+                theme::METER_DEFAULT
+            };
         }
 
         if self.meter_value > theme::CLIP_THRESHOLD {

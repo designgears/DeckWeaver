@@ -105,8 +105,10 @@ pub struct ActionSettings {
     pub device_id: Option<String>,
     pub device_type: Option<String>,
     pub volume_step: i8,
-    pub meters_enabled: bool,
-    pub meter_invert_color: bool,
+    /// `None` means on, for the same reason as `show_volume`: the inspector shows the box ticked
+    /// until the user unticks it, so an action never opened in the inspector must match.
+    pub meters_enabled: Option<bool>,
+    pub meter_invert_color: Option<bool>,
     pub meter_color: Option<Vec<u8>>,
     pub volume_bar_color: Option<Vec<u8>>,
     pub icon_fa: Option<String>,
@@ -184,8 +186,8 @@ fn build_config(
         settings.device_id.clone(),
         settings.parse_device_type(),
         settings.volume_step,
-        settings.meters_enabled,
-        settings.meter_invert_color,
+        settings.meters_enabled.unwrap_or(true),
+        settings.meter_invert_color.unwrap_or(true),
         ActionSettings::color_tuple(&settings.volume_bar_color),
         ActionSettings::color_tuple(&settings.meter_color),
         icon_path,

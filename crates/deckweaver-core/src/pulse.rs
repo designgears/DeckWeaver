@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use libpulse_binding::callbacks::ListResult;
 use libpulse_binding::context::{Context, FlagSet as ContextFlagSet, State};
 use libpulse_binding::mainloop::standard::{IterateResult, Mainloop};
+use libpulse_binding::stream::{FlagSet as StreamFlagSet, PeekResult, State as StreamState, Stream};
 use libpulse_binding::volume::{ChannelVolumes, Volume};
 use parking_lot::RwLock;
 
@@ -72,6 +73,9 @@ pub struct AppStream {
     pub name: String,
     /// Every live sink input belonging to this app.
     pub indices: Vec<u32>,
+    /// Sink each of those inputs plays into, parallel to `indices`. Needed to open a peak meter
+    /// on the right monitor source.
+    sinks: Vec<u32>,
     /// Process ids behind those streams. Used to match an app to the focused window, which
     /// reports the pid of the process that owns the window.
     pub pids: Vec<u32>,
@@ -195,6 +199,10 @@ enum Command {
 
 pub struct PulseBackend {
     snapshot: Arc<RwLock<Vec<AppStream>>>,
+    /// App key -> current peak level, 0-100. Only populated while metering is on.
+    peaks: Arc<RwLock<HashMap<String, u8>>>,
+    /// Whether any action wants app levels. Off, the worker opens no monitor streams at all.
+    metering: Arc<AtomicBool>,
     /// Key of the last app a focus-following action settled on. See [`PulseBackend::focused_app`].
     last_focused: RwLock<Option<String>>,
     available: Arc<AtomicBool>,
@@ -209,6 +217,8 @@ impl PulseBackend {
         let (command_tx, command_rx) = mpsc::channel();
         let backend = Arc::new(Self {
             snapshot: Arc::new(RwLock::new(Vec::new())),
+            peaks: Arc::new(RwLock::new(HashMap::new())),
+            metering: Arc::new(AtomicBool::new(false)),
             last_focused: RwLock::new(None),
             available: Arc::new(AtomicBool::new(false)),
             running: Arc::new(AtomicBool::new(true)),
@@ -216,12 +226,21 @@ impl PulseBackend {
         });
 
         let snapshot = backend.snapshot.clone();
+        let peaks = backend.peaks.clone();
+        let metering = backend.metering.clone();
         let available = backend.available.clone();
         let running = backend.running.clone();
 
         let spawned = std::thread::Builder::new()
             .name("deckweaver-pulse".into())
-            .spawn(move || worker(snapshot, available, running, command_rx));
+            .spawn(move || {
+                let shared = Shared {
+                    snapshot,
+                    peaks,
+                    metering,
+                };
+                worker(shared, available, running, command_rx)
+            });
 
         if let Err(err) = spawned {
             tracing::error!("failed to spawn PulseAudio worker: {err}");
@@ -234,6 +253,18 @@ impl PulseBackend {
     /// True once a sound server connection is established.
     pub fn is_available(&self) -> bool {
         self.available.load(Ordering::Relaxed)
+    }
+
+    /// Turn app level metering on or off. The render loop calls this every pass with whether any
+    /// app action currently shows meters, so monitor streams only exist while something displays
+    /// them.
+    pub fn set_metering(&self, on: bool) {
+        self.metering.store(on, Ordering::Relaxed);
+    }
+
+    /// Current peak level for an app, 0-100. Zero when unmetered or silent.
+    pub fn peak(&self, key: &str) -> u8 {
+        self.peaks.read().get(key).copied().unwrap_or(0)
     }
 
     /// Every app currently playing audio, sorted by display name.
@@ -388,8 +419,15 @@ impl Drop for PulseBackend {
 
 /// Owns the mainloop and context for the whole process lifetime, reconnecting whenever the sound
 /// server goes away.
-fn worker(
+/// State the worker publishes to the rest of the crate.
+struct Shared {
     snapshot: Arc<RwLock<Vec<AppStream>>>,
+    peaks: Arc<RwLock<HashMap<String, u8>>>,
+    metering: Arc<AtomicBool>,
+}
+
+fn worker(
+    shared: Shared,
     available: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
     command_rx: Receiver<Command>,
@@ -399,9 +437,10 @@ fn worker(
             Some((mainloop, context)) => {
                 available.store(true, Ordering::Relaxed);
                 tracing::info!("connected to PulseAudio");
-                run_session(mainloop, context, &snapshot, &running, &command_rx);
+                run_session(mainloop, context, &shared, &running, &command_rx);
                 available.store(false, Ordering::Relaxed);
-                snapshot.write().clear();
+                shared.snapshot.write().clear();
+                shared.peaks.write().clear();
                 tracing::info!("lost PulseAudio connection");
             }
             None => {
@@ -449,10 +488,11 @@ fn connect() -> Option<(Mainloop, Context)> {
 fn run_session(
     mut mainloop: Mainloop,
     mut context: Context,
-    snapshot: &Arc<RwLock<Vec<AppStream>>>,
+    shared: &Shared,
     running: &Arc<AtomicBool>,
     command_rx: &Receiver<Command>,
 ) {
+    let snapshot = &shared.snapshot;
     // The introspection callback fires on the mainloop, so results land here rather than being
     // returned. Rc/RefCell keeps it single-threaded and avoids a lock on the hot path.
     let poll_result: Rc<RwLock<Option<Vec<RawStream>>>> = Rc::new(RwLock::new(None));
@@ -462,8 +502,10 @@ fn run_session(
     let mut managed: HashMap<String, Managed> = HashMap::new();
     // Sink index -> display name. Sinks change far less often than streams, so this is refreshed
     // on its own slower cadence.
-    let sink_result: Rc<RwLock<Option<HashMap<u32, String>>>> = Rc::new(RwLock::new(None));
-    let mut sinks: HashMap<u32, String> = HashMap::new();
+    let sink_result: Rc<RwLock<Option<HashMap<u32, SinkMeta>>>> = Rc::new(RwLock::new(None));
+    let mut sinks: HashMap<u32, SinkMeta> = HashMap::new();
+    // Peak monitors, one per sink input, keyed by the input's index.
+    let mut monitors: HashMap<u32, Monitor> = HashMap::new();
     let mut last_sink_poll = Instant::now() - SINK_POLL_INTERVAL;
     let mut sink_inflight = false;
     let mut last_poll = Instant::now() - POLL_INTERVAL;
@@ -492,12 +534,21 @@ fn run_session(
             last_sink_poll = Instant::now();
             sink_inflight = true;
             let target = sink_result.clone();
-            let mut collected: HashMap<u32, String> = HashMap::new();
+            let mut collected: HashMap<u32, SinkMeta> = HashMap::new();
             context
                 .introspect()
                 .get_sink_info_list(move |result| match result {
                     ListResult::Item(info) => {
-                        collected.insert(info.index, sink_display_name(info));
+                        collected.insert(
+                            info.index,
+                            SinkMeta {
+                                name: sink_display_name(info),
+                                monitor_source: info
+                                    .monitor_source_name
+                                    .as_ref()
+                                    .map(|n| n.to_string()),
+                            },
+                        );
                     }
                     ListResult::End => *target.write() = Some(std::mem::take(&mut collected)),
                     ListResult::Error => *target.write() = None,
@@ -512,6 +563,9 @@ fn run_session(
             adopt_new_streams(&mut context, &mut apps, &mut managed, &mut pending);
             *snapshot.write() = apps;
         }
+
+        sync_monitors(&mainloop, &mut monitors, &snapshot.read(), &sinks, shared);
+        read_peaks(&mut monitors, shared);
 
         for command in command_rx.try_iter() {
             match command {
@@ -538,6 +592,241 @@ fn run_session(
 
         std::thread::sleep(TICK);
     }
+}
+
+/// What the worker keeps about each sink.
+#[derive(Debug, Clone, PartialEq)]
+struct SinkMeta {
+    /// Display name, the PipeWeaver channel when one is in use.
+    name: String,
+    /// Name of the sink's monitor source, which is where a per-stream peak meter has to record
+    /// from. `None` for the rare sink that has no monitor.
+    monitor_source: Option<String>,
+}
+
+/// Sample rate the monitors record at. Low, because only the envelope matters; 8 kHz still
+/// resolves any peak the meter could show and keeps each stream at 32 KB/s.
+const PEAK_RATE: u32 = 8000;
+
+/// Length of one meter window. Matches PipeWeaver's meter filter, which reports the peak of every
+/// 100ms of audio, so an app key and a PipeWeaver channel key move at the same rate.
+const PEAK_WINDOW: Duration = Duration::from_millis(100);
+
+/// Samples per meter window.
+const PEAK_WINDOW_SAMPLES: usize = (PEAK_RATE as usize * PEAK_WINDOW.as_millis() as usize) / 1000;
+
+/// PipeWeaver's meter curve: `100 * peak^(1/3.8)`, the inverse of the power law its volume
+/// control uses. Copied so an app level reads the same as a channel level at the same loudness.
+const METER_POWER_FACTOR: f32 = 3.8;
+
+/// How long a monitor may go without delivering before its reading is treated as silence.
+const PEAK_STALE: Duration = Duration::from_millis(250);
+
+/// How long a monitor gets to connect and reach a running stream before it is given up on and
+/// reopened. A monitor on an idle input can legitimately sit in "creating" for a while.
+const MONITOR_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A record stream on one sink input's monitor, with its own server connection.
+///
+/// The connection is per monitor on purpose. pipewire-pulse gets confused by several
+/// `set_monitor_stream` records on the same monitor source from one client: the data ends up
+/// delivered to the wrong one, and the input that is actually playing starves for seconds at a
+/// time. One client per stream — which is what running several `parec --monitor-stream`
+/// processes amounts to — is reliable.
+struct Monitor {
+    context: Context,
+    stream: Option<Stream>,
+    index: u32,
+    monitor_source: String,
+    key: String,
+    level: u8,
+    last_data: Instant,
+    opened: Instant,
+    /// Peak so far in the window being accumulated, and how many samples it covers.
+    window_peak: f32,
+    window_samples: usize,
+}
+
+impl Monitor {
+    fn is_dead(&self) -> bool {
+        if matches!(self.context.get_state(), State::Failed | State::Terminated) {
+            return true;
+        }
+        match &self.stream {
+            Some(stream) => matches!(
+                stream.get_state(),
+                StreamState::Failed | StreamState::Terminated
+            ),
+            None => self.opened.elapsed() > MONITOR_SETUP_TIMEOUT,
+        }
+    }
+
+    /// Create the record stream once the connection is up.
+    fn advance(&mut self) {
+        if self.stream.is_some() || self.context.get_state() != State::Ready {
+            return;
+        }
+        self.stream = open_monitor_stream(&mut self.context, self.index, &self.monitor_source);
+        if self.stream.is_none() {
+            // Make `is_dead` pick it up rather than retrying on a broken connection.
+            let _ = self.context.disconnect();
+        }
+    }
+}
+
+/// Open and close peak monitors so exactly the live sink inputs are metered while metering is on.
+fn sync_monitors(
+    mainloop: &Mainloop,
+    monitors: &mut HashMap<u32, Monitor>,
+    apps: &[AppStream],
+    sinks: &HashMap<u32, SinkMeta>,
+    shared: &Shared,
+) {
+    if !shared.metering.load(Ordering::Relaxed) {
+        if !monitors.is_empty() {
+            monitors.clear();
+            shared.peaks.write().clear();
+        }
+        return;
+    }
+
+    let mut live: HashSet<u32> = HashSet::new();
+    for app in apps {
+        for (index, sink) in app.indices.iter().zip(app.sinks.iter()) {
+            live.insert(*index);
+            if monitors.contains_key(index) {
+                continue;
+            }
+            let Some(source) = sinks.get(sink).and_then(|s| s.monitor_source.as_deref()) else {
+                continue;
+            };
+            let Some(mut context) = Context::new(mainloop, "DeckWeaver meter") else {
+                continue;
+            };
+            if context.connect(None, ContextFlagSet::NOFLAGS, None).is_err() {
+                continue;
+            }
+            monitors.insert(
+                *index,
+                Monitor {
+                    context,
+                    stream: None,
+                    index: *index,
+                    monitor_source: source.to_string(),
+                    key: app.key.clone(),
+                    level: 0,
+                    last_data: Instant::now(),
+                    opened: Instant::now(),
+                    window_peak: 0.0,
+                    window_samples: 0,
+                },
+            );
+        }
+    }
+
+    // Inputs that went away, and monitors the server dropped (the input was destroyed, or moved
+    // to another sink) — the next pass reopens those if the input still exists.
+    monitors.retain(|index, monitor| live.contains(index) && !monitor.is_dead());
+    for monitor in monitors.values_mut() {
+        monitor.advance();
+    }
+}
+
+/// A float32 mono record stream at a low sample rate, attached to the input via
+/// `set_monitor_stream` and recording from the sink's monitor source. The peaks are computed here
+/// from the raw samples: PulseAudio's own `PEAK_DETECT` mode would do it server-side, but on
+/// pipewire-pulse those streams deliver in bursts with multi-second gaps between them.
+fn open_monitor_stream(context: &mut Context, index: u32, monitor_source: &str) -> Option<Stream> {
+    let spec = libpulse_binding::sample::Spec {
+        format: libpulse_binding::sample::Format::FLOAT32NE,
+        rate: PEAK_RATE,
+        channels: 1,
+    };
+    let mut stream = Stream::new(context, "DeckWeaver meter", &spec, None)?;
+    stream.set_monitor_stream(index).ok()?;
+
+    // Fragments a quarter of a window long, so a window closes promptly rather than waiting on a
+    // large chunk the server has buffered up.
+    let attr = libpulse_binding::def::BufferAttr {
+        maxlength: u32::MAX,
+        tlength: u32::MAX,
+        prebuf: u32::MAX,
+        minreq: u32::MAX,
+        fragsize: (PEAK_WINDOW_SAMPLES / 4 * std::mem::size_of::<f32>()) as u32,
+    };
+    let flags = StreamFlagSet::ADJUST_LATENCY
+        | StreamFlagSet::DONT_MOVE
+        | StreamFlagSet::DONT_INHIBIT_AUTO_SUSPEND;
+    stream
+        .connect_record(Some(monitor_source), Some(&attr), flags)
+        .ok()?;
+    Some(stream)
+}
+
+/// A window's peak amplitude as PipeWeaver would report it, 0-100.
+fn meter_percent(peak: f32) -> u8 {
+    if peak <= 1e-9 {
+        return 0;
+    }
+    (100.0 * peak.powf(1.0 / METER_POWER_FACTOR)).clamp(0.0, 100.0) as u8
+}
+
+/// Drain every monitor and publish the per-app peak.
+fn read_peaks(monitors: &mut HashMap<u32, Monitor>, shared: &Shared) {
+    if monitors.is_empty() {
+        return;
+    }
+
+    let now = Instant::now();
+    for monitor in monitors.values_mut() {
+        let Some(stream) = monitor.stream.as_mut() else {
+            continue;
+        };
+        if stream.get_state() != StreamState::Ready {
+            continue;
+        }
+        let mut got_data = false;
+        loop {
+            match stream.peek() {
+                Ok(PeekResult::Data(bytes)) => {
+                    got_data = true;
+                    for sample in bytes
+                        .chunks_exact(4)
+                        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]).abs())
+                    {
+                        monitor.window_peak = monitor.window_peak.max(sample);
+                    }
+                    monitor.window_samples += bytes.len() / 4;
+                    let _ = stream.discard();
+                }
+                Ok(PeekResult::Hole(size)) => {
+                    // Dropped audio counts as silence towards the window.
+                    monitor.window_samples += size / 4;
+                    let _ = stream.discard();
+                }
+                Ok(PeekResult::Empty) | Err(_) => break,
+            }
+        }
+        if got_data {
+            monitor.last_data = now;
+        }
+        // Emit one reading per full window, the same way PipeWeaver's filter does.
+        while monitor.window_samples >= PEAK_WINDOW_SAMPLES {
+            monitor.level = meter_percent(monitor.window_peak);
+            monitor.window_peak = 0.0;
+            monitor.window_samples -= PEAK_WINDOW_SAMPLES;
+        }
+        if !got_data && now.duration_since(monitor.last_data) > PEAK_STALE {
+            monitor.level = 0;
+        }
+    }
+
+    let mut peaks: HashMap<String, u8> = HashMap::new();
+    for monitor in monitors.values() {
+        let entry = peaks.entry(monitor.key.clone()).or_insert(0);
+        *entry = (*entry).max(monitor.level);
+    }
+    *shared.peaks.write() = peaks;
 }
 
 /// One sink input as read off the wire, before per-app grouping.
@@ -700,7 +989,7 @@ fn percent_to_volume(percent: u8) -> Volume {
 }
 
 /// Collapse per-stream rows into one row per app.
-fn aggregate_with_sinks(raw: Vec<RawStream>, sinks: &HashMap<u32, String>) -> Vec<AppStream> {
+fn aggregate_with_sinks(raw: Vec<RawStream>, sinks: &HashMap<u32, SinkMeta>) -> Vec<AppStream> {
     let mut by_key: HashMap<String, AppStream> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
 
@@ -708,6 +997,7 @@ fn aggregate_with_sinks(raw: Vec<RawStream>, sinks: &HashMap<u32, String>) -> Ve
         match by_key.get_mut(&stream.key) {
             Some(existing) => {
                 existing.indices.push(stream.index);
+                existing.sinks.push(stream.sink);
                 if let Some(pid) = stream.pid {
                     existing.pids.push(pid);
                 }
@@ -730,13 +1020,14 @@ fn aggregate_with_sinks(raw: Vec<RawStream>, sinks: &HashMap<u32, String>) -> Ve
                         key: stream.key,
                         name: stream.name,
                         indices: vec![stream.index],
+                        sinks: vec![stream.sink],
                         pids: stream.pid.into_iter().collect(),
                         channels: stream.channels,
                         volume: stream.volume,
                         is_muted: stream.muted,
                         icon_name: stream.icon_name,
                         steam_app_id: stream.steam_app_id,
-                        routed_to: sinks.get(&stream.sink).cloned(),
+                        routed_to: sinks.get(&stream.sink).map(|s| s.name.clone()),
                     },
                 );
             }
@@ -996,6 +1287,16 @@ mod tests {
     }
 
     #[test]
+    fn meter_curve_matches_pipeweaver() {
+        assert_eq!(meter_percent(0.0), 0);
+        assert_eq!(meter_percent(1.0), 100);
+        assert_eq!(meter_percent(2.0), 100);
+        // 0.3 linear peak reads as ~73 on PipeWeaver's curve, not 30.
+        assert_eq!(meter_percent(0.3), 72);
+        assert!(meter_percent(0.01) > 25);
+    }
+
+    #[test]
     fn percent_round_trips_through_volume() {
         for percent in [0u8, 1, 25, 50, 99, 100] {
             assert_eq!(volume_to_percent(percent_to_volume(percent)), percent);
@@ -1160,7 +1461,13 @@ mod tests {
 
     #[test]
     fn routing_is_attached_from_the_sink_map() {
-        let sinks = HashMap::from([(1u32, "Browser".to_string())]);
+        let sinks = HashMap::from([(
+            1u32,
+            SinkMeta {
+                name: "Browser".to_string(),
+                monitor_source: None,
+            },
+        )]);
         let apps = aggregate_with_sinks(vec![raw("msedge", "Microsoft Edge", 1, 50, false)], &sinks);
         assert_eq!(apps[0].routed_to.as_deref(), Some("Browser"));
     }
