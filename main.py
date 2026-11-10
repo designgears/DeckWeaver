@@ -60,7 +60,6 @@ _action_callbacks: dict[str, tuple[Any, Any]] = {}  # action_id -> (image_callba
 
 def _poll_updates() -> bool:
     """Poll for pending updates from Rust core and process them"""
-    global _core, _action_callbacks
     if _core is None:
         return True  # Continue polling
     
@@ -102,7 +101,7 @@ def _get_core() -> DeckWeaverCore:
 
 def _release_core():
     """Stop and release the core"""
-    global _core, _poll_timeout_id, _action_callbacks
+    global _core, _poll_timeout_id
     if _poll_timeout_id is not None:
         GLib.source_remove(_poll_timeout_id)
         _poll_timeout_id = None
@@ -329,6 +328,9 @@ class BaseAction(ActionBase):
     SHOW_METERS_ROW = False
     SHOW_HOLD_REPEAT_ROW = False
     SHOW_VOLUME_ROW = False
+    # A stored device id with no stored type is resolved by the core. When the id matches both a
+    # source and a target, this picks the target (the output device switch, whose device always is).
+    PREFER_TARGET_DEVICE = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -408,6 +410,20 @@ class BaseAction(ActionBase):
             self._hold_start(step_fn)
         elif event in (Input.Key.Events.UP, getattr(Input.Key.Events, "HOLD_STOP", None)):
             self._hold_stop()
+
+    def _volume_key_event(self, event: Any, step: int, nudge, toggle_mute, extra: tuple = ()):
+        """A volume key: `nudge(device_id, step, *extra)` on press and while held. A step of 0 is
+        a mute key instead, `toggle_mute(device_id, *extra)` once per tap with no repeat."""
+        if not self._device_id:
+            self._hold_stop()
+            return
+        device_id = self._device_id
+        if step == 0:
+            if event == Input.Key.Events.SHORT_UP:
+                toggle_mute(device_id, *extra)
+            return
+        # Bind the target now so a held key keeps stepping the device it started on.
+        self._handle_hold_key(event, lambda: nudge(device_id, step, *extra))
 
     @staticmethod
     def _normalize_hold_repeat_ms(value: Any) -> int:
@@ -548,7 +564,6 @@ class BaseAction(ActionBase):
 
     def _register_with_core(self):
         """Register this action with the Rust core"""
-        global _action_callbacks
         self._load_settings()
         config = self._build_config()
         self._core.register_action(config)
@@ -557,7 +572,6 @@ class BaseAction(ActionBase):
 
     def _unregister_from_core(self):
         """Unregister this action from the Rust core"""
-        global _action_callbacks
         _action_callbacks.pop(self._action_id, None)
         self._core.unregister_action(self._action_id)
 
@@ -609,9 +623,7 @@ class BaseAction(ActionBase):
         return None
 
     def _infer_device_type(self, device_id: str) -> Optional[DeviceType]:
-        return self._core.infer_device_type(
-            device_id, isinstance(self, SourceSwitchButtonAction)
-        )
+        return self._core.infer_device_type(device_id, self.PREFER_TARGET_DEVICE)
 
     def _set_selected_source_mix(self, mix: str):
         mix = "B" if mix == "B" else "A"
@@ -671,20 +683,13 @@ class BaseAction(ActionBase):
         self.icon_preview.set_size_request(20, 20)
         self.icon_preview.set_pixel_size(20)
 
-        default_subtitle = self._icon_row_default_subtitle()
-        if self._icon_path and os.path.exists(self._icon_path):
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    self._icon_path, width=20, height=20, preserve_aspect_ratio=True
-                )
-                self.icon_preview.set_from_pixbuf(pixbuf)
-                icon_name = os.path.splitext(os.path.basename(self._icon_path))[0]
-                icon_row.set_subtitle(f"Selected: {icon_name}")
-            except Exception:
-                icon_row.set_subtitle(default_subtitle)
-                self.icon_preview.set_visible(False)
-        else:
-            icon_row.set_subtitle(default_subtitle)
+        self.icon_row = icon_row
+        if not (
+            self._icon_path
+            and os.path.exists(self._icon_path)
+            and self._show_icon_preview(self._icon_path)
+        ):
+            icon_row.set_subtitle(self._icon_row_default_subtitle())
             self.icon_preview.set_visible(False)
 
         icon_content_box.append(self.icon_preview)
@@ -703,8 +708,21 @@ class BaseAction(ActionBase):
 
         icon_content_box.append(icon_button_box)
         icon_row.add_suffix(icon_content_box)
-        self.icon_row = icon_row
         return icon_row
+
+    def _show_icon_preview(self, icon_path: str) -> bool:
+        """Show `icon_path` in the icon row; False if it could not be loaded."""
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                icon_path, width=20, height=20, preserve_aspect_ratio=True
+            )
+            self.icon_preview.set_from_pixbuf(pixbuf)
+            self.icon_preview.set_visible(True)
+            icon_name = os.path.splitext(os.path.basename(icon_path))[0]
+            self.icon_row.set_subtitle(f"Selected: {icon_name}")
+            return True
+        except Exception:
+            return False
 
     def _backend_available(self) -> bool:
         """Which service this action needs before its config UI is worth showing. The app actions
@@ -720,6 +738,65 @@ class BaseAction(ActionBase):
     def _device_picker_title(self) -> str:
         return self.plugin_base.lm.get("ui.device.title")
 
+    def _backend_error_row(self) -> Adw.ActionRow:
+        error_row = Adw.ActionRow()
+        error_row.set_title(self._backend_unavailable_title())
+        error_row.set_subtitle(self._backend_unavailable_subtitle())
+        error_row.add_css_class("warning")
+        return error_row
+
+    def _build_device_expander(
+        self, title: str, subtitle: str, on_expanded, on_refresh, min_height: int = 220
+    ) -> tuple[Adw.ExpanderRow, Gtk.Box]:
+        """An expander listing devices in a scrolled box, with a refresh button. Returns the
+        expander and the box to fill."""
+        expander = Adw.ExpanderRow()
+        expander.set_title(title)
+        expander.set_subtitle(subtitle)
+
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        container.set_margin_start(30)
+        container.set_margin_end(30)
+        container.set_margin_bottom(12)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_min_content_height(min_height)
+        scrolled.set_child(container)
+        expander.add_row(scrolled)
+        expander.connect("notify::expanded", on_expanded)
+
+        refresh = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text=self.plugin_base.lm.get("ui.refresh_devices.button"),
+        )
+        refresh.connect("clicked", on_refresh)
+        expander.add_suffix(refresh)
+        return expander, container
+
+    @staticmethod
+    def _build_spin_row(
+        lower: int, upper: int, step: int, value: int, title: str, subtitle: str, on_changed
+    ) -> Adw.SpinRow:
+        row = Adw.SpinRow.new_with_range(lower, upper, step)
+        row.set_value(value)  # before connecting, so loading the value is not saved back
+        row.set_title(title)
+        row.set_subtitle(subtitle)
+        row.connect("notify::value", on_changed)
+        return row
+
+    @staticmethod
+    def _build_switch_row(title: str, subtitle: str, active: bool, on_changed) -> Adw.ActionRow:
+        row = Adw.ActionRow()
+        row.set_title(title)
+        row.set_subtitle(subtitle)
+        switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        switch.set_active(active)
+        switch.connect("notify::active", on_changed)
+        row.add_suffix(switch)
+        return row
+
     def get_config_rows(self):
         """Return configuration UI rows - matching original GitHub style"""
         lm = self.plugin_base.lm
@@ -729,100 +806,68 @@ class BaseAction(ActionBase):
         self.icon_preview = None
 
         if not self._backend_available():
-            error_row = Adw.ActionRow()
-            error_row.set_title(self._backend_unavailable_title())
-            error_row.set_subtitle(self._backend_unavailable_subtitle())
-            error_row.add_css_class("warning")
-            return [error_row]
+            return [self._backend_error_row()]
 
-        # Device Expander Row (original style)
-        self.device_expander = Adw.ExpanderRow()
-        self.device_expander.set_title(self._device_picker_title())
-        self.device_expander.set_subtitle(self._device_name or "No device selected")
-        
-        self.device_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.device_container.set_margin_start(30)
-        self.device_container.set_margin_end(30)
-        self.device_container.set_margin_bottom(12)
-        
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scrolled.set_min_content_height(300)
-        scrolled.set_child(self.device_container)
-        
-        self.device_expander.add_row(scrolled)
-        self.device_expander.connect("notify::expanded", self._on_device_expander_expanded)
-        self._populate_device_list()
-        
-        refresh_button = Gtk.Button(
-            icon_name="view-refresh-symbolic",
-            valign=Gtk.Align.CENTER,
-            tooltip_text=lm.get("ui.refresh_devices.button")
+        self.device_expander, self.device_container = self._build_device_expander(
+            self._device_picker_title(),
+            self._device_name or "No device selected",
+            self._on_device_expander_expanded,
+            self._on_refresh_clicked,
+            min_height=300,
         )
-        refresh_button.connect("clicked", self._on_refresh_clicked)
-        self.device_expander.add_suffix(refresh_button)
-
-        # Custom Icon Row
-        icon_row = self._build_icon_row()
+        self._populate_device_list()
 
         min_step, max_step = self.VOLUME_STEP_RANGE
-        self.volume_step_row = Adw.SpinRow.new_with_range(min_step, max_step, 1)
-        self.volume_step_row.set_value(self._volume_step)
-        self.volume_step_row.set_subtitle(
-            self.VOLUME_STEP_SUBTITLE or lm.get("ui.volume_step.subtitle")
-        )
-        self.volume_step_row.set_title(lm.get("ui.volume_step.title"))
-        self.volume_step_row.connect("notify::value", self._on_volume_step_changed)
-
-        # Meters Enabled Row
-        meters_enabled_row = Adw.ActionRow()
-        meters_enabled_row.set_title("Meters Enabled")
-        meters_enabled_row.set_subtitle("Show audio level meters")
-        
-        self.meters_enabled_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
-        self.meters_enabled_switch.set_active(self._meters_enabled)
-        self.meters_enabled_switch.connect("notify::active", self._on_meters_enabled_changed)
-        meters_enabled_row.add_suffix(self.meters_enabled_switch)
-
-        # Volume Percentage Row (encoder strip only)
-        show_volume_row = Adw.ActionRow()
-        show_volume_row.set_title(lm.get("ui.show_volume.title"))
-        show_volume_row.set_subtitle(lm.get("ui.show_volume.subtitle"))
-
-        self.show_volume_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
-        self.show_volume_switch.set_active(self._show_volume)
-        self.show_volume_switch.connect("notify::active", self._on_show_volume_changed)
-        show_volume_row.add_suffix(self.show_volume_switch)
-
         rows = [
             self.device_expander,
-            self.volume_step_row,
+            self._build_icon_row(),
+            self._build_spin_row(
+                min_step,
+                max_step,
+                1,
+                self._volume_step,
+                lm.get("ui.volume_step.title"),
+                self.VOLUME_STEP_SUBTITLE or lm.get("ui.volume_step.subtitle"),
+                self._on_volume_step_changed,
+            ),
         ]
-        if icon_row is not None:
-            rows.insert(1, icon_row)
 
         if self.SHOW_HOLD_REPEAT_ROW:
-            self.hold_repeat_row = Adw.SpinRow.new_with_range(
-                MIN_REPEAT_INTERVAL_MS, MAX_REPEAT_INTERVAL_MS, 50
-            )
-            self.hold_repeat_row.set_value(self._hold_repeat_ms)
-            self.hold_repeat_row.set_title(
-                lm.get("ui.hold_repeat.title", "Hold Repeat Speed (ms)")
-            )
-            self.hold_repeat_row.set_subtitle(
-                lm.get(
-                    "ui.hold_repeat.subtitle",
-                    "Time between steps while the key is held. Lower is faster.",
+            rows.append(
+                self._build_spin_row(
+                    MIN_REPEAT_INTERVAL_MS,
+                    MAX_REPEAT_INTERVAL_MS,
+                    50,
+                    self._hold_repeat_ms,
+                    lm.get("ui.hold_repeat.title", "Hold Repeat Speed (ms)"),
+                    lm.get(
+                        "ui.hold_repeat.subtitle",
+                        "Time between steps while the key is held. Lower is faster.",
+                    ),
+                    self._on_hold_repeat_changed,
                 )
             )
-            self.hold_repeat_row.connect("notify::value", self._on_hold_repeat_changed)
-            rows.append(self.hold_repeat_row)
 
         if self.SHOW_METERS_ROW:
-            rows.append(meters_enabled_row)
+            rows.append(
+                self._build_switch_row(
+                    "Meters Enabled",
+                    "Show audio level meters",
+                    self._meters_enabled,
+                    self._on_meters_enabled_changed,
+                )
+            )
 
+        # Volume percentage (encoder strip only)
         if self.SHOW_VOLUME_ROW:
-            rows.append(show_volume_row)
+            rows.append(
+                self._build_switch_row(
+                    lm.get("ui.show_volume.title"),
+                    lm.get("ui.show_volume.subtitle"),
+                    self._show_volume,
+                    self._on_show_volume_changed,
+                )
+            )
 
         return rows
 
@@ -868,13 +913,14 @@ class BaseAction(ActionBase):
             group.set_margin_top(12)
             group.set_margin_bottom(6)
             for device in device_group:
-                row = self._create_device_row(device)
-                group.add(row)
-                if device.id == self._device_id:
-                    row.add_css_class("selected")
+                group.add(
+                    self._build_device_row(
+                        device, self._on_device_row_activated, device.id == self._device_id
+                    )
+                )
             self.device_container.append(group)
 
-    def _build_device_row(self, device, callback) -> Adw.ActionRow:
+    def _build_device_row(self, device, callback, selected: bool) -> Adw.ActionRow:
         """Create a styled device row"""
         row = Adw.ActionRow()
         row.set_title(device.name)
@@ -893,11 +939,30 @@ class BaseAction(ActionBase):
         row.device_data = device
         row.set_activatable(True)
         row.connect("activated", callback)
-        
+        if selected:
+            row.add_css_class("selected")
         return row
 
-    def _create_device_row(self, device) -> Adw.ActionRow:
-        return self._build_device_row(device, self._on_device_row_activated)
+    def _fill_device_container(
+        self, container: Gtk.Box, devices: list, build_row, empty_title: str, empty_subtitle: str
+    ):
+        """Replace `container`'s rows with one `build_row(device)` per device, or a disabled
+        placeholder row when there are none."""
+        self._clear_box_children(container)
+        if not devices:
+            row = Adw.ActionRow()
+            row.set_title(empty_title)
+            row.set_subtitle(empty_subtitle)
+            row.set_sensitive(False)
+            container.append(row)
+            return
+
+        group = Adw.PreferencesGroup()
+        group.set_margin_top(12)
+        group.set_margin_bottom(6)
+        for device in devices:
+            group.add(build_row(device))
+        container.append(group)
 
     def _on_device_row_activated(self, row: Adw.ActionRow):
         """Handle device row activation"""
@@ -942,17 +1007,7 @@ class BaseAction(ActionBase):
         self._persist_settings(icon_path_from_picker=icon_path)
         
         if self.icon_preview is not None and os.path.exists(icon_path):
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    icon_path, width=20, height=20, preserve_aspect_ratio=True
-                )
-                self.icon_preview.set_from_pixbuf(pixbuf)
-                self.icon_preview.set_visible(True)
-                if self.icon_row is not None:
-                    icon_name = os.path.splitext(os.path.basename(icon_path))[0]
-                    self.icon_row.set_subtitle(f"Selected: {icon_name}")
-            except Exception:
-                pass
+            self._show_icon_preview(icon_path)
         
         self._update_config()
 
@@ -1146,7 +1201,7 @@ class KnobAction(BaseAction):
             self._set_knob_volume_relative(-self._volume_step)
         elif event == Input.Dial.Events.SHORT_UP:
             # Toggle the active profile and apply to the selected mix.
-            if self._device_id and self._mute_profile_index < len(self._mute_profile_data):
+            if self._mute_profile_index < len(self._mute_profile_data):
                 self._toggle_mute_profile()
             self._update_config()
         elif event == Input.Dial.Events.SHORT_TOUCH_PRESS:
@@ -1167,105 +1222,52 @@ class ButtonAction(BaseAction):
     VOLUME_STEP_RANGE = (-20, 20)
     VOLUME_STEP_SUBTITLE = "Positive = vol up, Negative = vol down, Zero = mute toggle"
 
-    def get_config_rows(self):
-        return super().get_config_rows()
-
     def _resolved_icon_path(self) -> Optional[str]:
         return super()._resolved_icon_path() or (
             DEFAULT_BUTTON_ICON_PATH if os.path.exists(DEFAULT_BUTTON_ICON_PATH) else None
         )
 
-    def _build_hardware_device_row(self, device, callback, selected_node_id: Optional[int]):
-        row = Adw.ActionRow()
-        row.set_title(device.description or device.name or f"Node {device.node_id}")
-        row.set_subtitle(device.name or "Physical device")
-        row.device_data = device
-        row.set_activatable(True)
-        row.connect("activated", callback)
-        if device.node_id is not None and device.node_id == selected_node_id:
-            row.add_css_class("selected")
-        return row
-
-    def _populate_hardware_device_list(
-        self,
-        container: Gtk.Box,
-        devices: list,
-        callback,
-        selected_node_id: Optional[int],
-        empty_locale_key: str,
-        empty_subtitle: str,
-    ):
-        self._clear_box_children(container)
-        if not devices:
-            row = Adw.ActionRow()
-            row.set_title(
-                self.plugin_base.lm.get(empty_locale_key, "No physical devices found")
-            )
-            row.set_subtitle(empty_subtitle)
-            row.set_sensitive(False)
-            container.append(row)
-            return
-
-        group = Adw.PreferencesGroup()
-        group.set_margin_top(12)
-        group.set_margin_bottom(6)
-        for device in devices:
-            row = self._build_hardware_device_row(device, callback, selected_node_id)
-            group.add(row)
-        container.append(group)
-
-    def _fill_device_container(
-        self,
-        container: Gtk.Box,
-        devices: list,
-        callback,
-        empty_locale_key: str,
-        empty_subtitle: str,
-    ):
-        self._clear_box_children(container)
-        if not devices:
-            row = Adw.ActionRow()
-            row.set_title(
-                self.plugin_base.lm.get(empty_locale_key, "No devices found")
-            )
-            row.set_subtitle(empty_subtitle)
-            row.set_sensitive(False)
-            container.append(row)
-            return
-
-        group = Adw.PreferencesGroup()
-        group.set_margin_top(12)
-        group.set_margin_bottom(6)
-        for device in devices:
-            row = self._build_device_row(device, callback)
-            if device.id == self._device_id:
-                row.add_css_class("selected")
-            group.add(row)
-        container.append(group)
-
     def event_callback(self, event: Any, data: Any):
-        if not self._device_id:
-            self._hold_stop()
-            return
-        if self._volume_step == 0:
-            # Mute button: one toggle per tap, no repeat.
-            if event == Input.Key.Events.SHORT_UP:
-                self._core.toggle_mute(self._device_id, self._device_type)
-            return
-        device_id, step, device_type = self._device_id, self._volume_step, self._device_type
-        self._handle_hold_key(
-            event, lambda: self._core.set_volume_relative(device_id, step, device_type)
+        self._volume_key_event(
+            event,
+            self._volume_step,
+            self._core.set_volume_relative,
+            self._core.toggle_mute,
+            (self._device_type,),
         )
 
 
-class SourceSwitchButtonAction(ButtonAction):
-    """Button that switches a hardware output target to a selected physical device."""
+class _HardwareSwitchButtonAction(ButtonAction):
+    """Button that moves a PipeWeaver physical device onto a selected hardware device.
+
+    Subclasses pick the direction (output or input): which devices are listed, the locale keys
+    and English fallbacks, and which core call does the switch.
+    """
+
+    # Locale key prefix and fallbacks for the PipeWeaver device picker...
+    DEVICE_KEY = ""
+    DEVICE_TITLE = ""
+    DEVICE_NONE = ""
+    DEVICE_EMPTY_HINT = ""
+    # ...and for the hardware device picker.
+    HARDWARE_KEY = ""
+    HARDWARE_TITLE = ""
+    HARDWARE_EMPTY_HINT = ""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._hardware_device_node_id: Optional[int] = None
         self._hardware_device_description: Optional[str] = None
         self._hardware_device_name: Optional[str] = None
+
+    def _pipeweaver_devices(self) -> list:
+        raise NotImplementedError
+
+    def _hardware_devices(self) -> list:
+        raise NotImplementedError
+
+    def _switch_hardware_device(self, device_id: str, node_id: int):
+        raise NotImplementedError
 
     def _load_settings(self):
         super()._load_settings()
@@ -1275,7 +1277,7 @@ class SourceSwitchButtonAction(ButtonAction):
 
         # Resolve node_id from the stored description (which is stable across reboots)
         if self._hardware_device_description is not None and self._hardware_device_node_id is None:
-            for device in self._core.get_output_hardware_devices():
+            for device in self._hardware_devices():
                 if device.description == self._hardware_device_description:
                     self._hardware_device_node_id = device.node_id
                     # Back-fill name if missing
@@ -1283,98 +1285,38 @@ class SourceSwitchButtonAction(ButtonAction):
                         self._hardware_device_name = device.name
                     break
 
+    def _hardware_device_subtitle(self) -> str:
+        return self._hardware_device_name or self.plugin_base.lm.get(
+            f"{self.HARDWARE_KEY}.none", "No physical device selected"
+        )
+
     def get_config_rows(self):
         lm = self.plugin_base.lm
         self._load_settings()
         self.output_expander = None
         self.source_expander = None
 
-        if not self._core.is_available():
-            error_row = Adw.ActionRow()
-            error_row.set_title(lm.get("ui.error.not_running.title"))
-            error_row.set_subtitle(lm.get("ui.error.not_running.subtitle"))
-            error_row.add_css_class("warning")
-            return [error_row]
+        if not self._backend_available():
+            return [self._backend_error_row()]
 
-        self.output_expander = Adw.ExpanderRow()
-        self.output_expander.set_title(
-            lm.get("ui.output_device.title", "Hardware Output Device")
-        )
-        self.output_expander.set_subtitle(
-            self._device_name
-            or lm.get("ui.output_device.none", "No hardware output selected")
-        )
-
-        self.output_device_container = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=0,
-        )
-        self.output_device_container.set_margin_start(30)
-        self.output_device_container.set_margin_end(30)
-        self.output_device_container.set_margin_bottom(12)
-
-        output_scrolled = Gtk.ScrolledWindow()
-        output_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        output_scrolled.set_min_content_height(220)
-        output_scrolled.set_child(self.output_device_container)
-
-        self.output_expander.add_row(output_scrolled)
-        self.output_expander.connect(
-            "notify::expanded", self._on_output_expander_expanded
+        self.output_expander, self.output_device_container = self._build_device_expander(
+            lm.get(f"{self.DEVICE_KEY}.title", self.DEVICE_TITLE),
+            self._device_name or lm.get(f"{self.DEVICE_KEY}.none", self.DEVICE_NONE),
+            self._on_output_expander_expanded,
+            self._on_output_refresh_clicked,
         )
         self._populate_output_device_list()
 
-        output_refresh = Gtk.Button(
-            icon_name="view-refresh-symbolic",
-            valign=Gtk.Align.CENTER,
-            tooltip_text=lm.get("ui.refresh_devices.button"),
-        )
-        output_refresh.connect("clicked", self._on_output_refresh_clicked)
-        self.output_expander.add_suffix(output_refresh)
-
-        self.source_expander = Adw.ExpanderRow()
-        self.source_expander.set_title(
-            lm.get("ui.physical_device.title", "Physical Output Device")
-        )
-        self.source_expander.set_subtitle(
-            self._hardware_device_name
-            or lm.get("ui.physical_device.none", "No physical device selected")
-        )
-
-        self.source_device_container = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=0,
-        )
-        self.source_device_container.set_margin_start(30)
-        self.source_device_container.set_margin_end(30)
-        self.source_device_container.set_margin_bottom(12)
-
-        source_scrolled = Gtk.ScrolledWindow()
-        source_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        source_scrolled.set_min_content_height(260)
-        source_scrolled.set_child(self.source_device_container)
-
-        self.source_expander.add_row(source_scrolled)
-        self.source_expander.connect(
-            "notify::expanded", self._on_source_expander_expanded
+        self.source_expander, self.source_device_container = self._build_device_expander(
+            lm.get(f"{self.HARDWARE_KEY}.title", self.HARDWARE_TITLE),
+            self._hardware_device_subtitle(),
+            self._on_source_expander_expanded,
+            self._on_source_refresh_clicked,
+            min_height=260,
         )
         self._populate_source_device_list()
 
-        source_refresh = Gtk.Button(
-            icon_name="view-refresh-symbolic",
-            valign=Gtk.Align.CENTER,
-            tooltip_text=lm.get("ui.refresh_devices.button"),
-        )
-        source_refresh.connect("clicked", self._on_source_refresh_clicked)
-        self.source_expander.add_suffix(source_refresh)
-
-        icon_row = self._build_icon_row()
-
-        return [
-            self.output_expander,
-            self.source_expander,
-            icon_row,
-        ]
+        return [self.output_expander, self.source_expander, self._build_icon_row()]
 
     def _build_config(self) -> ActionConfig:
         config = super()._build_config()
@@ -1384,21 +1326,33 @@ class SourceSwitchButtonAction(ButtonAction):
     def _populate_output_device_list(self):
         self._fill_device_container(
             self.output_device_container,
-            self._core.get_physical_targets(),
-            self._on_output_row_activated,
-            "ui.output_device.empty",
-            "Check that PipeWeaver has detected your output device",
+            self._pipeweaver_devices(),
+            lambda device: self._build_device_row(
+                device, self._on_output_row_activated, device.id == self._device_id
+            ),
+            self.plugin_base.lm.get(f"{self.DEVICE_KEY}.empty", "No devices found"),
+            self.DEVICE_EMPTY_HINT,
         )
 
     def _populate_source_device_list(self):
-        self._populate_hardware_device_list(
+        self._fill_device_container(
             self.source_device_container,
-            self._core.get_output_hardware_devices(),
-            self._on_source_row_activated,
-            self._hardware_device_node_id,
-            "ui.physical_device.empty",
-            "Check that PipeWeaver has detected your hardware outputs",
+            self._hardware_devices(),
+            self._build_hardware_device_row,
+            self.plugin_base.lm.get(f"{self.HARDWARE_KEY}.empty", "No physical devices found"),
+            self.HARDWARE_EMPTY_HINT,
         )
+
+    def _build_hardware_device_row(self, device) -> Adw.ActionRow:
+        row = Adw.ActionRow()
+        row.set_title(device.description or device.name or f"Node {device.node_id}")
+        row.set_subtitle(device.name or "Physical device")
+        row.device_data = device
+        row.set_activatable(True)
+        row.connect("activated", self._on_source_row_activated)
+        if device.node_id is not None and device.node_id == self._hardware_device_node_id:
+            row.add_css_class("selected")
+        return row
 
     def _on_output_row_activated(self, row: Adw.ActionRow):
         device = row.device_data
@@ -1429,12 +1383,7 @@ class SourceSwitchButtonAction(ButtonAction):
         )
 
         if self.source_expander is not None:
-            self.source_expander.set_subtitle(
-                self._hardware_device_name
-                or self.plugin_base.lm.get(
-                    "ui.physical_device.none", "No physical device selected"
-                )
-            )
+            self.source_expander.set_subtitle(self._hardware_device_subtitle())
 
     def _on_output_expander_expanded(self, expander: Adw.ExpanderRow, _):
         if expander.get_expanded():
@@ -1456,211 +1405,50 @@ class SourceSwitchButtonAction(ButtonAction):
         if not self._device_id or self._hardware_device_node_id is None:
             return
 
-        self._core.switch_output_hardware_device(
-            self._device_id, self._hardware_device_node_id
-        )
+        self._switch_hardware_device(self._device_id, self._hardware_device_node_id)
 
 
-class PhysicalSourceSwitchButtonAction(ButtonAction):
+class SourceSwitchButtonAction(_HardwareSwitchButtonAction):
+    """Button that switches a hardware output target to a selected physical device."""
+
+    PREFER_TARGET_DEVICE = True
+    DEVICE_KEY = "ui.output_device"
+    DEVICE_TITLE = "Hardware Output Device"
+    DEVICE_NONE = "No hardware output selected"
+    DEVICE_EMPTY_HINT = "Check that PipeWeaver has detected your output device"
+    HARDWARE_KEY = "ui.physical_device"
+    HARDWARE_TITLE = "Physical Output Device"
+    HARDWARE_EMPTY_HINT = "Check that PipeWeaver has detected your hardware outputs"
+
+    def _pipeweaver_devices(self) -> list:
+        return self._core.get_physical_targets()
+
+    def _hardware_devices(self) -> list:
+        return self._core.get_output_hardware_devices()
+
+    def _switch_hardware_device(self, device_id: str, node_id: int):
+        self._core.switch_output_hardware_device(device_id, node_id)
+
+
+class PhysicalSourceSwitchButtonAction(_HardwareSwitchButtonAction):
     """Button that switches a hardware input source to a selected physical device."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._hardware_device_node_id: Optional[int] = None
-        self._hardware_device_description: Optional[str] = None
-        self._hardware_device_name: Optional[str] = None
+    DEVICE_KEY = "ui.input_device"
+    DEVICE_TITLE = "Hardware Input Device"
+    DEVICE_NONE = "No hardware input selected"
+    DEVICE_EMPTY_HINT = "Check that PipeWeaver has detected your input device"
+    HARDWARE_KEY = "ui.physical_input_device"
+    HARDWARE_TITLE = "Physical Input Device"
+    HARDWARE_EMPTY_HINT = "Check that PipeWeaver has detected your hardware inputs"
 
-    def _load_settings(self):
-        super()._load_settings()
-        settings = self.get_settings()
-        self._hardware_device_description = settings.get("hardware_device_description")
-        self._hardware_device_name = settings.get("hardware_device_name")
+    def _pipeweaver_devices(self) -> list:
+        return self._core.get_physical_sources()
 
-        # Resolve node_id from the stored description (stable across reboots)
-        if self._hardware_device_description is not None and self._hardware_device_node_id is None:
-            for device in self._core.get_input_hardware_devices():
-                if device.description == self._hardware_device_description:
-                    self._hardware_device_node_id = device.node_id
-                    if not self._hardware_device_name and device.name:
-                        self._hardware_device_name = device.name
-                    break
+    def _hardware_devices(self) -> list:
+        return self._core.get_input_hardware_devices()
 
-    def get_config_rows(self):
-        lm = self.plugin_base.lm
-        self._load_settings()
-        self.output_expander = None
-        self.source_expander = None
-
-        if not self._core.is_available():
-            error_row = Adw.ActionRow()
-            error_row.set_title(lm.get("ui.error.not_running.title"))
-            error_row.set_subtitle(lm.get("ui.error.not_running.subtitle"))
-            error_row.add_css_class("warning")
-            return [error_row]
-
-        self.output_expander = Adw.ExpanderRow()
-        self.output_expander.set_title(
-            lm.get("ui.input_device.title", "Hardware Input Device")
-        )
-        self.output_expander.set_subtitle(
-            self._device_name
-            or lm.get("ui.input_device.none", "No hardware input selected")
-        )
-
-        self.output_device_container = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=0,
-        )
-        self.output_device_container.set_margin_start(30)
-        self.output_device_container.set_margin_end(30)
-        self.output_device_container.set_margin_bottom(12)
-
-        output_scrolled = Gtk.ScrolledWindow()
-        output_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        output_scrolled.set_min_content_height(220)
-        output_scrolled.set_child(self.output_device_container)
-
-        self.output_expander.add_row(output_scrolled)
-        self.output_expander.connect(
-            "notify::expanded", self._on_output_expander_expanded
-        )
-        self._populate_output_device_list()
-
-        output_refresh = Gtk.Button(
-            icon_name="view-refresh-symbolic",
-            valign=Gtk.Align.CENTER,
-            tooltip_text=lm.get("ui.refresh_devices.button"),
-        )
-        output_refresh.connect("clicked", self._on_output_refresh_clicked)
-        self.output_expander.add_suffix(output_refresh)
-
-        self.source_expander = Adw.ExpanderRow()
-        self.source_expander.set_title(
-            lm.get("ui.physical_input_device.title", "Physical Input Device")
-        )
-        self.source_expander.set_subtitle(
-            self._hardware_device_name
-            or lm.get("ui.physical_input_device.none", "No physical device selected")
-        )
-
-        self.source_device_container = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=0,
-        )
-        self.source_device_container.set_margin_start(30)
-        self.source_device_container.set_margin_end(30)
-        self.source_device_container.set_margin_bottom(12)
-
-        source_scrolled = Gtk.ScrolledWindow()
-        source_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        source_scrolled.set_min_content_height(260)
-        source_scrolled.set_child(self.source_device_container)
-
-        self.source_expander.add_row(source_scrolled)
-        self.source_expander.connect(
-            "notify::expanded", self._on_source_expander_expanded
-        )
-        self._populate_source_device_list()
-
-        source_refresh = Gtk.Button(
-            icon_name="view-refresh-symbolic",
-            valign=Gtk.Align.CENTER,
-            tooltip_text=lm.get("ui.refresh_devices.button"),
-        )
-        source_refresh.connect("clicked", self._on_source_refresh_clicked)
-        self.source_expander.add_suffix(source_refresh)
-
-        icon_row = self._build_icon_row()
-
-        return [
-            self.output_expander,
-            self.source_expander,
-            icon_row,
-        ]
-
-    def _build_config(self) -> ActionConfig:
-        config = super()._build_config()
-        config.button_overlay = False
-        return config
-
-    def _populate_output_device_list(self):
-        self._fill_device_container(
-            self.output_device_container,
-            self._core.get_physical_sources(),
-            self._on_output_row_activated,
-            "ui.input_device.empty",
-            "Check that PipeWeaver has detected your input device",
-        )
-
-    def _populate_source_device_list(self):
-        self._populate_hardware_device_list(
-            self.source_device_container,
-            self._core.get_input_hardware_devices(),
-            self._on_source_row_activated,
-            self._hardware_device_node_id,
-            "ui.physical_input_device.empty",
-            "Check that PipeWeaver has detected your hardware inputs",
-        )
-
-    def _on_output_row_activated(self, row: Adw.ActionRow):
-        device = row.device_data
-        if not device:
-            return
-
-        self._set_selected_device(device)
-
-        if self.output_expander is not None:
-            self.output_expander.set_subtitle(device.name)
-
-        self._update_config()
-
-    def _on_source_row_activated(self, row: Adw.ActionRow):
-        device = row.device_data
-        if not device:
-            return
-
-        self._hardware_device_node_id = device.node_id
-        self._hardware_device_description = device.description
-        self._hardware_device_name = device.name or device.description or (
-            str(device.node_id) if device.node_id is not None else None
-        )
-        self._persist_settings(
-            hardware_device_description=self._hardware_device_description,
-            hardware_device_node_id=self._hardware_device_node_id,
-            hardware_device_name=self._hardware_device_name,
-        )
-
-        if self.source_expander is not None:
-            self.source_expander.set_subtitle(
-                self._hardware_device_name
-                or self.plugin_base.lm.get(
-                    "ui.physical_input_device.none", "No physical device selected"
-                )
-            )
-
-    def _on_output_expander_expanded(self, expander: Adw.ExpanderRow, _):
-        if expander.get_expanded():
-            self._populate_output_device_list()
-
-    def _on_source_expander_expanded(self, expander: Adw.ExpanderRow, _):
-        if expander.get_expanded():
-            self._populate_source_device_list()
-
-    def _on_output_refresh_clicked(self, button: Gtk.Button):
-        self._populate_output_device_list()
-
-    def _on_source_refresh_clicked(self, button: Gtk.Button):
-        self._populate_source_device_list()
-
-    def event_callback(self, event: Any, data: Any):
-        if event != Input.Key.Events.SHORT_UP:
-            return
-        if not self._device_id or self._hardware_device_node_id is None:
-            return
-
-        self._core.switch_input_hardware_device(
-            self._device_id, self._hardware_device_node_id
-        )
+    def _switch_hardware_device(self, device_id: str, node_id: int):
+        self._core.switch_input_hardware_device(device_id, node_id)
 
 
 class RouteToggleButtonAction(ButtonAction):
@@ -1688,45 +1476,14 @@ class RouteToggleButtonAction(ButtonAction):
         config.route_target_id = self._route_target_id
         return config
 
-    def _build_device_expander(self, title: str, subtitle: str, on_expanded, on_refresh):
-        lm = self.plugin_base.lm
-        expander = Adw.ExpanderRow()
-        expander.set_title(title)
-        expander.set_subtitle(subtitle)
-
-        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        container.set_margin_start(30)
-        container.set_margin_end(30)
-        container.set_margin_bottom(12)
-
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scrolled.set_min_content_height(220)
-        scrolled.set_child(container)
-        expander.add_row(scrolled)
-        expander.connect("notify::expanded", on_expanded)
-
-        refresh = Gtk.Button(
-            icon_name="view-refresh-symbolic",
-            valign=Gtk.Align.CENTER,
-            tooltip_text=lm.get("ui.refresh_devices.button"),
-        )
-        refresh.connect("clicked", on_refresh)
-        expander.add_suffix(refresh)
-        return expander, container
-
     def get_config_rows(self):
         lm = self.plugin_base.lm
         self._load_settings()
         self.source_expander = None
         self.target_expander = None
 
-        if not self._core.is_available():
-            error_row = Adw.ActionRow()
-            error_row.set_title(lm.get("ui.error.not_running.title"))
-            error_row.set_subtitle(lm.get("ui.error.not_running.subtitle"))
-            error_row.add_css_class("warning")
-            return [error_row]
+        if not self._backend_available():
+            return [self._backend_error_row()]
 
         self.source_expander, self.route_source_container = self._build_device_expander(
             lm.get("ui.route_source.title", "Source"),
@@ -1750,31 +1507,23 @@ class RouteToggleButtonAction(ButtonAction):
         self._fill_device_container(
             self.route_source_container,
             self._core.get_sources(),
-            self._on_route_source_activated,
-            "ui.route_source.empty",
+            lambda device: self._build_device_row(
+                device, self._on_route_source_activated, device.id == self._device_id
+            ),
+            self.plugin_base.lm.get("ui.route_source.empty", "No devices found"),
             "Check that PipeWeaver is running",
         )
 
     def _populate_route_targets(self):
-        container = self.route_target_container
-        self._clear_box_children(container)
-        targets = self._core.get_targets()
-        if not targets:
-            row = Adw.ActionRow()
-            row.set_title(self.plugin_base.lm.get("ui.route_target.empty", "No targets found"))
-            row.set_subtitle("Check that PipeWeaver is running")
-            row.set_sensitive(False)
-            container.append(row)
-            return
-        group = Adw.PreferencesGroup()
-        group.set_margin_top(12)
-        group.set_margin_bottom(6)
-        for device in targets:
-            row = self._build_device_row(device, self._on_route_target_activated)
-            if device.id == self._route_target_id:
-                row.add_css_class("selected")
-            group.add(row)
-        container.append(group)
+        self._fill_device_container(
+            self.route_target_container,
+            self._core.get_targets(),
+            lambda device: self._build_device_row(
+                device, self._on_route_target_activated, device.id == self._route_target_id
+            ),
+            self.plugin_base.lm.get("ui.route_target.empty", "No targets found"),
+            "Check that PipeWeaver is running",
+        )
 
     def _on_route_source_activated(self, row: Adw.ActionRow):
         device = row.device_data
@@ -1823,11 +1572,8 @@ class SliderAction(BaseAction):
         return config
 
     def get_config_rows(self):
-        # Base class already creates the correct row for SliderAction
         rows = super().get_config_rows()
 
-        # Orientation selector
-        lm = self.plugin_base.lm
         orientation_row = Adw.ActionRow()
         orientation_row.set_title("Orientation")
         orientation_row.set_subtitle("Slider direction")
@@ -1849,12 +1595,12 @@ class SliderAction(BaseAction):
         self._update_config()
 
     def event_callback(self, event: Any, data: Any):
-        if not self._device_id:
-            self._hold_stop()
-            return
-        device_id, step, device_type = self._device_id, self._slider_step(), self._device_type
-        self._handle_hold_key(
-            event, lambda: self._core.set_volume_relative(device_id, step, device_type)
+        self._volume_key_event(
+            event,
+            self._slider_step(),
+            self._core.set_volume_relative,
+            None,
+            (self._device_type,),
         )
 
 
@@ -2023,78 +1769,22 @@ class AppKnobAction(AppActionMixin, BaseAction):
             self._core.toggle_app_mute(self._device_id)
 
 
-class AppButtonAction(AppActionMixin, BaseAction):
+class AppButtonAction(AppActionMixin, ButtonAction):
     """Per-application volume on a key (positive = up, negative = down, zero = mute)."""
 
-    SHOW_HOLD_REPEAT_ROW = True
-
-    ACTION_TYPE = ActionType.button()
-    VOLUME_STEP_RANGE = (-20, 20)
-    VOLUME_STEP_SUBTITLE = "Positive = vol up, Negative = vol down, Zero = mute toggle"
-
-    def _resolved_icon_path(self) -> Optional[str]:
-        return super()._resolved_icon_path() or (
-            DEFAULT_BUTTON_ICON_PATH if os.path.exists(DEFAULT_BUTTON_ICON_PATH) else None
-        )
-
     def event_callback(self, event: Any, data: Any):
-        if not self._device_id:
-            self._hold_stop()
-            return
-        if self._volume_step == 0:
-            if event == Input.Key.Events.SHORT_UP:
-                self._core.toggle_app_mute(self._device_id)
-            return
-        device_id, step = self._device_id, self._volume_step
-        self._handle_hold_key(
-            event, lambda: self._core.set_app_volume_relative(device_id, step)
+        self._volume_key_event(
+            event,
+            self._volume_step,
+            self._core.set_app_volume_relative,
+            self._core.toggle_app_mute,
         )
 
 
-class AppSliderAction(AppActionMixin, BaseAction):
+class AppSliderAction(AppActionMixin, SliderAction):
     """Per-application volume as one half of a virtual slider."""
 
-    ACTION_TYPE = ActionType.slider()
-    VOLUME_STEP_RANGE = (-20, 20)
-    VOLUME_STEP_SUBTITLE = "Positive = top slider, Negative = bottom"
-    SHOW_HOLD_REPEAT_ROW = True
-    SHOW_METERS_ROW = True
-
-    def _build_config(self) -> ActionConfig:
-        config = super()._build_config()
-        settings = self.get_settings()
-        config.orientation = settings.get("orientation", "vertical")
-        config.is_top = self._slider_step() > 0
-        return config
-
-    def get_config_rows(self):
-        rows = super().get_config_rows()
-
-        orientation_row = Adw.ActionRow()
-        orientation_row.set_title("Orientation")
-        orientation_row.set_subtitle("Slider direction")
-
-        self.orientation_combo = Gtk.ComboBoxText()
-        self.orientation_combo.append("vertical", "Vertical")
-        self.orientation_combo.append("horizontal", "Horizontal")
-        self.orientation_combo.set_active_id(
-            self.get_settings().get("orientation", "vertical")
-        )
-        self.orientation_combo.connect("changed", self._on_orientation_changed)
-        orientation_row.add_suffix(self.orientation_combo)
-        rows.append(orientation_row)
-
-        return rows
-
-    def _on_orientation_changed(self, combo: Gtk.ComboBoxText):
-        self._persist_settings(orientation=combo.get_active_id())
-        self._update_config()
-
     def event_callback(self, event: Any, data: Any):
-        if not self._device_id:
-            self._hold_stop()
-            return
-        device_id, step = self._device_id, self._slider_step()
-        self._handle_hold_key(
-            event, lambda: self._core.set_app_volume_relative(device_id, step)
+        self._volume_key_event(
+            event, self._slider_step(), self._core.set_app_volume_relative, None
         )
