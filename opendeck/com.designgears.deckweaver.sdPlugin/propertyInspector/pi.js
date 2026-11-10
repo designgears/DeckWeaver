@@ -60,12 +60,17 @@ function setStatus(text, isError = false) {
   el.classList.toggle("error", isError);
 }
 
-function populateDeviceSelect(select, devices, selectedId) {
+// Empty a picker down to its "nothing selected" entry.
+function resetSelect(select, placeholder) {
   select.innerHTML = "";
   const empty = document.createElement("option");
   empty.value = "";
-  empty.textContent = "Select a device…";
+  empty.textContent = placeholder;
   select.appendChild(empty);
+}
+
+function populateDeviceSelect(select, devices, selectedId) {
+  resetSelect(select, "Select a device…");
   for (const device of devices) {
     const option = document.createElement("option");
     option.value = device.id;
@@ -279,40 +284,77 @@ function holdRepeatFromInput(input) {
   return value;
 }
 
-function initActionInspector(options) {
-  window.deckweaverPiOptions = options;
-  if (options.showIconPicker !== false) {
-    wireFaIconPicker();
-  }
+// Volume-step bounds and default for this page, set by its init call.
+let piOptions = {};
+// Fills this page's pickers from a "devices" message; each page's init picks its own.
+let handleDevices = populateActionDevices;
+
+function onChange(id, handler) {
+  document.getElementById(id)?.addEventListener("change", (event) => handler(event.target));
+}
+
+// Common to every page: the icon picker and the refresh button, which asks the plugin to resend
+// the device (or app) list.
+function initInspector(refreshEvent) {
+  wireFaIconPicker();
   document.getElementById("refresh")?.addEventListener("click", () => {
-    websocket?.send(JSON.stringify({ event: "sendToPlugin", context: uuid, payload: { event: "refreshDevices" } }));
+    websocket?.send(JSON.stringify({ event: "sendToPlugin", context: uuid, payload: { event: refreshEvent } }));
   });
-  document.getElementById("device")?.addEventListener("change", (event) => {
-    const selected = event.target.selectedOptions[0];
+}
+
+// The volume and display rows shared by the device and app pages; a page wires only the rows it has.
+function wireVolumeInputs(options) {
+  piOptions = options;
+  onChange("volumeStep", (input) => saveSettings({ volume_step: volumeStepFromInput(input) }));
+  onChange("holdRepeatMs", (input) => saveSettings({ hold_repeat_ms: holdRepeatFromInput(input) }));
+  onChange("orientation", (input) => saveSettings({ orientation: input.value }));
+  onChange("sourceMix", (input) => saveSettings({ source_mix: input.value }));
+  onChange("metersEnabled", (input) => saveSettings({ meters_enabled: input.checked }));
+  onChange("showVolume", (input) => saveSettings({ show_volume: input.checked }));
+  applyActionVisibility();
+}
+
+function initActionInspector(options) {
+  initInspector("refreshDevices");
+  onChange("device", (select) => {
     saveSettings({
-      device_id: event.target.value || null,
-      device_type: selected?.dataset.deviceType || null,
+      device_id: select.value || null,
+      device_type: select.selectedOptions[0]?.dataset.deviceType || null,
     });
   });
-  document.getElementById("volumeStep")?.addEventListener("change", (event) => {
-    saveSettings({ volume_step: volumeStepFromInput(event.target) });
+  wireVolumeInputs(options);
+}
+
+function initAppInspector(options) {
+  initInspector("refreshApps");
+  onChange("app", (select) => saveSettings({ device_id: select.value || null, device_type: "source" }));
+  wireVolumeInputs(options);
+}
+
+function initSourceSwitchInspector({ inputMode }) {
+  initInspector("refreshDevices");
+  handleDevices = (payload) => populateSwitchDevices(payload, inputMode);
+  onChange("outputDevice", (select) => {
+    saveSettings({ device_id: select.value || null, device_type: inputMode ? "source" : "target" });
   });
-  document.getElementById("holdRepeatMs")?.addEventListener("change", (event) => {
-    saveSettings({ hold_repeat_ms: holdRepeatFromInput(event.target) });
+  onChange("physicalDevice", (select) => {
+    const selected = select.selectedOptions[0];
+    saveSettings({
+      hardware_device_node_id: selected?.value ? Number(selected.value) : null,
+      hardware_device_description: selected?.dataset.description || null,
+    });
   });
-  document.getElementById("orientation")?.addEventListener("change", (event) => {
-    saveSettings({ orientation: event.target.value });
-  });
-  document.getElementById("sourceMix")?.addEventListener("change", (event) => {
-    saveSettings({ source_mix: event.target.value });
-  });
-  document.getElementById("metersEnabled")?.addEventListener("change", (event) => {
-    saveSettings({ meters_enabled: event.target.checked });
-  });
-  document.getElementById("showVolume")?.addEventListener("change", (event) => {
-    saveSettings({ show_volume: event.target.checked });
-  });
-  applyActionVisibility();
+}
+
+// Route toggle: one source and one target; the key turns that route on and off.
+function initRouteToggleInspector() {
+  initInspector("refreshDevices");
+  handleDevices = (payload) => {
+    populateDeviceSelect(document.getElementById("routeSource"), payload.sources || [], settings.device_id);
+    populateDeviceSelect(document.getElementById("routeTarget"), payload.targets || [], settings.route_target_id);
+  };
+  onChange("routeSource", (select) => saveSettings({ device_id: select.value || null, device_type: "source" }));
+  onChange("routeTarget", (select) => saveSettings({ route_target_id: select.value || null }));
 }
 
 // action.html is shared by the knob and button actions; only the knob renders the encoder
@@ -321,7 +363,7 @@ function initActionInspector(options) {
 const KNOB_ACTION_UUIDS = ["com.designgears.deckweaver.knob", "com.designgears.deckweaver.appknob"];
 
 function applyActionVisibility() {
-  // Fail open. This first runs from initActionInspector, which the inline script in the page
+  // Fail open. This first runs from the page's init call, which the inline script in the page
   // calls before connectElgatoStreamDeckSocket has set actionInfo — so a strict "is it the
   // knob?" test hides the row at load and never brings it back if the settings event that
   // re-runs this doesn't arrive. Hide only once we positively know it is some other action.
@@ -333,12 +375,11 @@ function applyActionVisibility() {
 }
 
 function populateFromSettings() {
-  const options = window.deckweaverPiOptions || {};
   const volumeStep = document.getElementById("volumeStep");
   if (volumeStep) {
-    volumeStep.min = String(options.minVolumeStep ?? 1);
-    volumeStep.max = String(options.maxVolumeStep ?? 20);
-    volumeStep.value = String(settings.volume_step ?? options.defaultVolumeStep ?? 5);
+    volumeStep.min = String(piOptions.minVolumeStep ?? 1);
+    volumeStep.max = String(piOptions.maxVolumeStep ?? 20);
+    volumeStep.value = String(settings.volume_step ?? piOptions.defaultVolumeStep ?? 5);
   }
   const holdRepeatMs = document.getElementById("holdRepeatMs");
   if (holdRepeatMs) holdRepeatMs.value = String(settings.hold_repeat_ms ?? 400);
@@ -351,10 +392,8 @@ function populateFromSettings() {
   const showVolume = document.getElementById("showVolume");
   if (showVolume) showVolume.checked = settings.show_volume !== false;
   applyActionVisibility();
-  if (options.showIconPicker !== false) {
-    setSelectedIconDisplay(settings.icon_fa || null);
-    if (iconComboboxOpen) renderIconComboboxList();
-  }
+  setSelectedIconDisplay(settings.icon_fa || null);
+  if (iconComboboxOpen) renderIconComboboxList();
 }
 
 function handlePluginMessage(payload) {
@@ -368,35 +407,22 @@ function handlePluginMessage(payload) {
     return;
   }
   setStatus("Connected to PipeWeaver");
+  handleDevices(payload);
+}
 
-  if (window.deckweaverSwitchMode === true || window.deckweaverSwitchMode === false) {
-    handleSwitchDevices(payload);
-    return;
-  }
-
-  if (window.deckweaverRouteMode) {
-    populateDeviceSelect(document.getElementById("routeSource"), payload.sources || [], settings.device_id);
-    populateDeviceSelect(document.getElementById("routeTarget"), payload.targets || [], settings.route_target_id);
-    return;
-  }
-
+function populateActionDevices(payload) {
   const devices = [...(payload.sources || []), ...(payload.targets || [])];
   const select = document.getElementById("device");
   if (select) populateDeviceSelect(select, devices, settings.device_id);
 }
 
-function handleSwitchDevices(payload) {
-  const inputMode = window.deckweaverSwitchMode === true;
+function populateSwitchDevices(payload, inputMode) {
   const targets = inputMode ? payload.sources || [] : payload.targets || [];
   const hardware = inputMode ? payload.inputHardware || [] : payload.outputHardware || [];
   populateDeviceSelect(document.getElementById("outputDevice"), targets, settings.device_id);
   const physical = document.getElementById("physicalDevice");
   if (!physical) return;
-  physical.innerHTML = "";
-  const empty = document.createElement("option");
-  empty.value = "";
-  empty.textContent = "Select a physical device…";
-  physical.appendChild(empty);
+  resetSelect(physical, "Select a physical device…");
   for (const device of hardware) {
     const option = document.createElement("option");
     option.value = String(device.node_id ?? "");
@@ -417,12 +443,7 @@ function handleApps(payload) {
 
   const select = document.getElementById("app");
   if (!select) return;
-
-  select.innerHTML = "";
-  const empty = document.createElement("option");
-  empty.value = "";
-  empty.textContent = "Select an application…";
-  select.appendChild(empty);
+  resetSelect(select, "Select an application…");
 
   // Offered only where the compositor can actually report focus, so it can't be selected on a
   // desktop where it would silently never resolve.
@@ -467,66 +488,4 @@ function handleApps(payload) {
 // fall back on when the app is not running to tell us its display name.
 function appNameFromId(deviceId) {
   return String(deviceId).replace(/^app:/, "") || deviceId;
-}
-
-function initAppInspector(options) {
-  window.deckweaverPiOptions = options;
-  if (options.showIconPicker !== false) {
-    wireFaIconPicker();
-  }
-  const requestApps = () => {
-    websocket?.send(JSON.stringify({ event: "sendToPlugin", context: uuid, payload: { event: "refreshApps" } }));
-  };
-  document.getElementById("refresh")?.addEventListener("click", requestApps);
-  document.getElementById("app")?.addEventListener("change", (event) => {
-    saveSettings({ device_id: event.target.value || null, device_type: "source" });
-  });
-  document.getElementById("volumeStep")?.addEventListener("change", (event) => {
-    saveSettings({ volume_step: volumeStepFromInput(event.target) });
-  });
-  document.getElementById("holdRepeatMs")?.addEventListener("change", (event) => {
-    saveSettings({ hold_repeat_ms: holdRepeatFromInput(event.target) });
-  });
-  document.getElementById("orientation")?.addEventListener("change", (event) => {
-    saveSettings({ orientation: event.target.value });
-  });
-  document.getElementById("metersEnabled")?.addEventListener("change", (event) => {
-    saveSettings({ meters_enabled: event.target.checked });
-  });
-  document.getElementById("showVolume")?.addEventListener("change", (event) => {
-    saveSettings({ show_volume: event.target.checked });
-  });
-}
-
-function initSourceSwitchInspector({ inputMode }) {
-  window.deckweaverSwitchMode = inputMode;
-  wireFaIconPicker();
-  document.getElementById("refresh")?.addEventListener("click", () => {
-    websocket?.send(JSON.stringify({ event: "sendToPlugin", context: uuid, payload: { event: "refreshDevices" } }));
-  });
-  document.getElementById("outputDevice")?.addEventListener("change", (event) => {
-    saveSettings({ device_id: event.target.value || null, device_type: inputMode ? "source" : "target" });
-  });
-  document.getElementById("physicalDevice")?.addEventListener("change", (event) => {
-    const selected = event.target.selectedOptions[0];
-    saveSettings({
-      hardware_device_node_id: selected?.value ? Number(selected.value) : null,
-      hardware_device_description: selected?.dataset.description || null,
-    });
-  });
-}
-
-// Route toggle: one source and one target; the key turns that route on and off.
-function initRouteToggleInspector() {
-  window.deckweaverRouteMode = true;
-  wireFaIconPicker();
-  document.getElementById("refresh")?.addEventListener("click", () => {
-    websocket?.send(JSON.stringify({ event: "sendToPlugin", context: uuid, payload: { event: "refreshDevices" } }));
-  });
-  document.getElementById("routeSource")?.addEventListener("change", (event) => {
-    saveSettings({ device_id: event.target.value || null, device_type: "source" });
-  });
-  document.getElementById("routeTarget")?.addEventListener("change", (event) => {
-    saveSettings({ route_target_id: event.target.value || null });
-  });
 }

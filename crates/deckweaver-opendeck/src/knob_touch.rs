@@ -8,7 +8,7 @@ use openaction::Instance;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
-use crate::shared::{build_config_for_instance, core, update_instance, ActionSettings};
+use crate::shared::{ActionSettings, build_config_for_instance, core, update_instance};
 
 const MUTE_PROFILE_COUNT: u8 = 2;
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(275);
@@ -80,6 +80,8 @@ impl Default for TouchTapState {
 static TOUCH_TAP_STATES: Lazy<Mutex<HashMap<String, TouchTapState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// One tap cycles the mute profile and two taps within [`DOUBLE_TAP_WINDOW`] toggle the mix, so a
+/// first tap is held back until the window has passed without a second one.
 pub async fn handle_touch_press(instance: &Instance, settings: ActionSettings) {
     let instance_id = instance.instance_id.to_string();
     let now = Instant::now();
@@ -87,30 +89,21 @@ pub async fn handle_touch_press(instance: &Instance, settings: ActionSettings) {
     let double_tap = {
         let mut states = TOUCH_TAP_STATES.lock();
         let state = states.entry(instance_id.clone()).or_default();
-        let within_window =
-            state.pending && now.duration_since(state.last_tap) <= DOUBLE_TAP_WINDOW;
-
-        if within_window {
-            state.pending = false;
-            if let Some(task) = state.flush_task.take() {
-                task.abort();
-            }
-            state.settings = settings;
-            true
-        } else {
-            if let Some(task) = state.flush_task.take() {
-                task.abort();
-            }
-            state.pending = true;
-            state.last_tap = now;
-            state.settings = settings;
-            false
+        if let Some(task) = state.flush_task.take() {
+            task.abort();
         }
+        let double_tap = state.pending && now.duration_since(state.last_tap) <= DOUBLE_TAP_WINDOW;
+        state.pending = !double_tap;
+        if !double_tap {
+            state.last_tap = now;
+        }
+        state.settings = settings.clone();
+        double_tap
     };
 
     if double_tap {
         debug!("DeckWeaver knob double tap on {}", instance_id);
-        flush_touch_tap(instance, 2).await;
+        let _ = toggle_knob_mix(instance, settings).await;
         return;
     }
 
@@ -134,7 +127,7 @@ pub async fn handle_touch_press(instance: &Instance, settings: ActionSettings) {
             return;
         };
         debug!("DeckWeaver knob single tap on {}", id);
-        flush_touch_tap_with_settings(&instance, settings, 1).await;
+        let _ = cycle_mute_profile(&instance, settings).await;
     });
 
     TOUCH_TAP_STATES
@@ -142,27 +135,6 @@ pub async fn handle_touch_press(instance: &Instance, settings: ActionSettings) {
         .entry(instance_id)
         .or_default()
         .flush_task = Some(task);
-}
-
-async fn flush_touch_tap(instance: &Instance, tap_count: u8) {
-    let settings = TOUCH_TAP_STATES
-        .lock()
-        .get(&instance.instance_id.to_string())
-        .map(|state| state.settings.clone())
-        .unwrap_or_default();
-    flush_touch_tap_with_settings(instance, settings, tap_count).await;
-}
-
-async fn flush_touch_tap_with_settings(
-    instance: &Instance,
-    settings: ActionSettings,
-    tap_count: u8,
-) {
-    if tap_count >= 2 {
-        let _ = toggle_knob_mix(instance, settings).await;
-    } else {
-        let _ = cycle_mute_profile(instance, settings).await;
-    }
 }
 
 pub async fn cycle_mute_profile(
@@ -201,19 +173,17 @@ pub async fn toggle_knob_mix(
     instance: &Instance,
     mut settings: ActionSettings,
 ) -> openaction::OpenActionResult<()> {
-    let Some(device_id) = settings.device_id.clone() else {
+    let Some(device_id) = settings.device_id.as_deref() else {
         return Ok(());
     };
 
     if settings.device_type.as_deref() == Some("source") {
-        let mix_b = settings.source_mix.as_deref() == Some("B");
-        settings.source_mix = Some(if mix_b { "A" } else { "B" }.to_string());
+        settings.source_mix = Some(if settings.is_mix_b() { "A" } else { "B" }.to_string());
         instance.set_settings(&settings).await?;
         update_instance(instance, ActionType::Knob, &settings);
         return Ok(());
     }
 
-    core().lock().toggle_target_mix(&device_id);
+    core().lock().toggle_target_mix(device_id);
     Ok(())
 }
-
