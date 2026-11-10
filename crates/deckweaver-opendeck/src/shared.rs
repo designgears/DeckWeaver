@@ -104,7 +104,9 @@ fn rgba_to_data_uri(rgba: &[u8], width: u32, height: u32) -> Option<String> {
 pub struct ActionSettings {
     pub device_id: Option<String>,
     pub device_type: Option<String>,
-    pub volume_step: i8,
+    /// `None` until the inspector has stored a value, so an untouched action gets the default
+    /// step while an explicit 0 still means "mute toggle" on the keys that support it.
+    pub volume_step: Option<i8>,
     /// `None` means on, for the same reason as `show_volume`: the inspector shows the box ticked
     /// until the user unticks it, so an action never opened in the inspector must match.
     pub meters_enabled: Option<bool>,
@@ -124,19 +126,39 @@ pub struct ActionSettings {
     /// an `Option` so the derived `Default` — used as a fallback on the touch-tap path — agrees
     /// with what serde produces for absent settings.
     pub show_volume: Option<bool>,
+    /// Route toggle only: the target the source in `device_id` is routed into.
+    pub route_target_id: Option<String>,
+    /// Volume keys: milliseconds between steps while the key is held. `None` uses the default.
+    pub hold_repeat_ms: Option<u32>,
 }
 
 impl ActionSettings {
     pub fn normalized_volume_step(&self, signed: bool, default: i8, min: i8, max: i8) -> i8 {
-        let mut value = if self.volume_step == 0 {
-            default
-        } else {
-            self.volume_step
+        let value = match self.volume_step {
+            None => default,
+            Some(step) if !signed => step.saturating_abs(),
+            Some(step) => step,
         };
-        if !signed {
-            value = value.abs();
-        }
         value.clamp(min, max)
+    }
+
+    /// Time between repeated steps while a volume key is held, kept within a sane range so a
+    /// typo in the inspector can neither flood PipeWeaver nor make holding pointless.
+    pub fn hold_repeat_interval(&self) -> std::time::Duration {
+        let ms = self
+            .hold_repeat_ms
+            .unwrap_or(crate::key_repeat::DEFAULT_REPEAT_MS)
+            .clamp(crate::key_repeat::MIN_REPEAT_MS, crate::key_repeat::MAX_REPEAT_MS);
+        std::time::Duration::from_millis(ms as u64)
+    }
+
+    /// Step for a slider half. Its sign picks the half (positive = top), so it can never be 0;
+    /// an explicit 0 falls back to the default rather than producing a key that does nothing.
+    pub fn slider_volume_step(&self) -> i8 {
+        match self.normalized_volume_step(true, 5, -20, 20) {
+            0 => 5,
+            step => step,
+        }
     }
 
     fn parse_device_type(&self) -> Option<CoreDeviceType> {
@@ -185,7 +207,7 @@ fn build_config(
         &mut config,
         settings.device_id.clone(),
         settings.parse_device_type(),
-        settings.volume_step,
+        settings.volume_step.unwrap_or(5),
         settings.meters_enabled.unwrap_or(true),
         settings.meter_invert_color.unwrap_or(true),
         ActionSettings::color_tuple(&settings.volume_bar_color),
@@ -196,6 +218,12 @@ fn build_config(
 
     if let Some(slug) = settings.icon_fa.as_ref().filter(|slug| !slug.is_empty()) {
         config.icon_png = crate::fa_icons::fa_icon_to_png(slug);
+    }
+
+    if let Some(target_id) = settings.route_target_id.clone().filter(|id| !id.is_empty()) {
+        // Drawn as a toggle (no +/- symbol), muted-looking while the route is off.
+        config.route_target_id = Some(target_id);
+        config.volume_step = 0;
     }
 
     if action_type == ActionType::Knob {
@@ -327,5 +355,61 @@ pub async fn handle_pi_message(
         Some("refreshDevices") => send_devices(instance).await,
         Some("refreshApps") => send_apps(instance).await,
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ActionSettings;
+
+    fn with_step(step: Option<i8>) -> ActionSettings {
+        ActionSettings {
+            volume_step: step,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn unset_step_uses_the_default() {
+        assert_eq!(with_step(None).normalized_volume_step(true, 5, -20, 20), 5);
+        assert_eq!(with_step(None).normalized_volume_step(false, 5, 1, 20), 5);
+    }
+
+    #[test]
+    fn explicit_zero_is_a_mute_key_on_signed_actions() {
+        assert_eq!(with_step(Some(0)).normalized_volume_step(true, 5, -20, 20), 0);
+    }
+
+    #[test]
+    fn negative_steps_survive_on_signed_actions() {
+        assert_eq!(with_step(Some(-10)).normalized_volume_step(true, 5, -20, 20), -10);
+        assert_eq!(with_step(Some(-10)).normalized_volume_step(false, 5, 1, 20), 10);
+    }
+
+    #[test]
+    fn slider_never_gets_a_zero_step() {
+        assert_eq!(with_step(Some(0)).slider_volume_step(), 5);
+        assert_eq!(with_step(Some(-5)).slider_volume_step(), -5);
+    }
+
+    #[test]
+    fn hold_repeat_interval_defaults_and_clamps() {
+        use std::time::Duration;
+        let mut settings = ActionSettings::default();
+        assert_eq!(settings.hold_repeat_interval(), Duration::from_millis(400));
+        settings.hold_repeat_ms = Some(150);
+        assert_eq!(settings.hold_repeat_interval(), Duration::from_millis(150));
+        settings.hold_repeat_ms = Some(1);
+        assert_eq!(settings.hold_repeat_interval(), Duration::from_millis(50));
+        settings.hold_repeat_ms = Some(60_000);
+        assert_eq!(settings.hold_repeat_interval(), Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn stored_number_deserializes_as_a_step() {
+        let settings: ActionSettings = serde_json::from_str(r#"{"volume_step": 0}"#).unwrap();
+        assert_eq!(settings.volume_step, Some(0));
+        let settings: ActionSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.volume_step, None);
     }
 }

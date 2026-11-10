@@ -67,6 +67,11 @@ enum Command {
         target_id: String,
         index: usize,
     },
+    SetRoute {
+        source_id: String,
+        target_id: String,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -309,6 +314,29 @@ impl DeckWeaverCore {
             .read()
             .as_ref()
             .and_then(|s| s.get_hardware_device_name(node_id, is_input))
+    }
+
+    /// Whether `source_id` is routed into `target_id`, or `None` before PipeWeaver has reported.
+    pub fn is_routed(&self, source_id: &str, target_id: &str) -> Option<bool> {
+        self.status
+            .read()
+            .as_ref()
+            .map(|status| status.is_routed(source_id, target_id))
+    }
+
+    pub fn set_route(&self, source_id: &str, target_id: &str, enabled: bool) -> bool {
+        self.send_command(Command::SetRoute {
+            source_id: source_id.to_string(),
+            target_id: target_id.to_string(),
+            enabled,
+        })
+    }
+
+    /// Flip the route from `source_id` into `target_id`, based on what PipeWeaver currently
+    /// reports so a change made in PipeWeaver's own UI is respected by the next press.
+    pub fn toggle_route(&self, source_id: &str, target_id: &str) -> bool {
+        self.is_routed(source_id, target_id)
+            .is_some_and(|routed| self.set_route(source_id, target_id, !routed))
     }
 
     pub fn infer_device_type(&self, device_id: &str, prefer_target: bool) -> Option<DeviceType> {
@@ -839,6 +867,24 @@ impl DeckWeaverCore {
                                     })
                                     .map(|device| {
                                         device.with_selected_source_mix(state.config.source_mix_b)
+                                    })
+                                    .map(|mut device| {
+                                        // A route toggle reads "muted" while the route is off,
+                                        // and names both ends so the key says what it connects.
+                                        if let (Some(st), Some(target_id)) = (
+                                            status_guard.as_ref(),
+                                            state.config.route_target_id.as_deref(),
+                                        ) {
+                                            device.is_muted =
+                                                !st.is_routed(&device.id, target_id);
+                                            if let Some(target) = st
+                                                .get_device(target_id, Some(DeviceType::Target))
+                                            {
+                                                device.name =
+                                                    format!("{}\n→ {}", device.name, target.name);
+                                            }
+                                        }
+                                        device
                                     })
                             };
 
@@ -1376,6 +1422,13 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
         Command::RemovePhysicalNode { target_id, index } => {
             serde_json::json!({"Pipewire": {"RemovePhysicalNode": [target_id, index]}})
         }
+        Command::SetRoute {
+            source_id,
+            target_id,
+            enabled,
+        } => {
+            serde_json::json!({"Pipewire": {"SetRoute": [source_id, target_id, enabled]}})
+        }
     };
 
     serde_json::to_string(&serde_json::json!({ "id": id, "data": data })).ok()
@@ -1504,5 +1557,30 @@ impl Renderers {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_route_serializes_to_the_pipeweaver_command() {
+        let status = Arc::new(RwLock::new(None));
+        let message = build_command(
+            &status,
+            7,
+            Command::SetRoute {
+                source_id: "mic".into(),
+                target_id: "phones".into(),
+                enabled: true,
+            },
+        )
+        .expect("SetRoute needs no status");
+        let value: Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"id": 7, "data": {"Pipewire": {"SetRoute": ["mic", "phones", true]}}})
+        );
     }
 }

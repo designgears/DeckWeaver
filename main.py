@@ -43,6 +43,15 @@ DEFAULT_BUTTON_ICON_PATH = os.path.join(
 )
 LANGUAGE_CODES = ("auto", "en_US", "es_ES", "zh_CN", "fr_FR", "de_DE")
 
+# Press-and-hold on the volume keys: one step on press, then a step every REPEAT_INTERVAL_MS once
+# the key has been held for HOLD_DELAY_MS. MAX_HOLD_REPEATS only matters if a release is lost.
+HOLD_DELAY_MS = 400
+# Time between steps while held; each key can change it with its "hold repeat speed" setting.
+DEFAULT_REPEAT_INTERVAL_MS = 400
+MIN_REPEAT_INTERVAL_MS = 50
+MAX_REPEAT_INTERVAL_MS = 1000
+MAX_HOLD_REPEATS = 100
+
 # Single shared core instance
 _core: Optional[DeckWeaverCore] = None
 _poll_timeout_id: Optional[int] = None
@@ -194,6 +203,23 @@ class DeckWeaver(PluginBase):
         self.add_action_holder(
             ActionHolder(
                 plugin_base=self,
+                action_base=RouteToggleButtonAction,
+                action_id_suffix="RouteToggleButton",
+                action_name=self.lm.get(
+                    "actions.route_toggle_button.name",
+                    "PipeWeaver Route Toggle",
+                ),
+                action_support={
+                    Input.Key: ActionInputSupport.SUPPORTED,
+                    Input.Dial: ActionInputSupport.UNSUPPORTED,
+                    Input.Touchscreen: ActionInputSupport.SUPPORTED,
+                },
+            )
+        )
+
+        self.add_action_holder(
+            ActionHolder(
+                plugin_base=self,
                 action_base=SliderAction,
                 action_id_suffix="Slider",
                 action_name=self.lm.get("actions.slider.name", "PipeWeaver Slider"),
@@ -301,6 +327,7 @@ class BaseAction(ActionBase):
     VOLUME_STEP_RANGE = (MIN_VOLUME_STEP, MAX_VOLUME_STEP)
     VOLUME_STEP_SUBTITLE: Optional[str] = None
     SHOW_METERS_ROW = False
+    SHOW_HOLD_REPEAT_ROW = False
     SHOW_VOLUME_ROW = False
 
     def __init__(self, *args, **kwargs):
@@ -324,6 +351,71 @@ class BaseAction(ActionBase):
         self.icon_preview: Optional[Gtk.Image] = None
         self.output_expander: Optional[Adw.ExpanderRow] = None
         self.source_expander: Optional[Adw.ExpanderRow] = None
+        self._hold_timeout_id: Optional[int] = None
+        self._hold_repeat_ms = DEFAULT_REPEAT_INTERVAL_MS
+
+    def _hold_start(self, step_fn):
+        """Step now, then keep stepping while the key is held, until `_hold_stop`."""
+        self._hold_stop()
+        remaining = [MAX_HOLD_REPEATS]
+
+        def step():
+            try:
+                step_fn()
+            except Exception as e:  # never let a failed step leave a timer running
+                log.error(f"DeckWeaver: hold step failed: {e}")
+                return False
+            return True
+
+        def tick():
+            remaining[0] -= 1
+            if remaining[0] < 0 or not step():
+                self._hold_timeout_id = None
+                return False
+            return True
+
+        def begin():
+            self._hold_timeout_id = GLib.timeout_add(self._hold_repeat_ms, tick)
+            tick()
+            return False
+
+        if step():
+            self._hold_timeout_id = GLib.timeout_add(HOLD_DELAY_MS, begin)
+
+    def _hold_stop(self):
+        if self._hold_timeout_id is not None:
+            GLib.source_remove(self._hold_timeout_id)
+            self._hold_timeout_id = None
+
+    def _handle_hold_key(self, event: Any, step_fn) -> bool:
+        """Drive a volume key's press-and-hold from its key events.
+
+        Returns True when the event was a press or release, so callers can ignore the
+        SHORT_UP that follows a quick tap (the press already stepped).
+        """
+        if event == Input.Key.Events.DOWN:
+            self._hold_start(step_fn)
+            return True
+        if event in (Input.Key.Events.UP, getattr(Input.Key.Events, "HOLD_STOP", None)):
+            self._hold_stop()
+            return True
+        return False
+
+    @staticmethod
+    def _normalize_hold_repeat_ms(value: Any) -> int:
+        try:
+            ms = int(value)
+        except (TypeError, ValueError):
+            return DEFAULT_REPEAT_INTERVAL_MS
+        return max(MIN_REPEAT_INTERVAL_MS, min(MAX_REPEAT_INTERVAL_MS, ms))
+
+    def _on_hold_repeat_changed(self, spin_row: Adw.SpinRow, _):
+        self._hold_repeat_ms = self._normalize_hold_repeat_ms(spin_row.get_value())
+        self._persist_settings(hold_repeat_ms=self._hold_repeat_ms)
+
+    def _slider_step(self) -> int:
+        """A slider half's step; its sign picks the half, so 0 falls back to the default."""
+        return self._volume_step or self.DEFAULT_VOLUME_STEP
 
     def _persist_settings(self, **updates):
         settings = self.get_settings()
@@ -418,6 +510,9 @@ class BaseAction(ActionBase):
         self._device_type = self._parse_device_type(settings.get("device_type"))
         volume_step = int(settings.get("volume_step", self.DEFAULT_VOLUME_STEP))
         self._volume_step = self._normalize_volume_step(volume_step)
+        self._hold_repeat_ms = self._normalize_hold_repeat_ms(
+            settings.get("hold_repeat_ms", DEFAULT_REPEAT_INTERVAL_MS)
+        )
         self._meters_enabled = settings.get("meters_enabled", True)
         self._show_volume = settings.get("show_volume", True)
         self._meter_invert_color = settings.get("meter_invert_color", True)
@@ -698,6 +793,23 @@ class BaseAction(ActionBase):
         if icon_row is not None:
             rows.insert(1, icon_row)
 
+        if self.SHOW_HOLD_REPEAT_ROW:
+            self.hold_repeat_row = Adw.SpinRow.new_with_range(
+                MIN_REPEAT_INTERVAL_MS, MAX_REPEAT_INTERVAL_MS, 50
+            )
+            self.hold_repeat_row.set_value(self._hold_repeat_ms)
+            self.hold_repeat_row.set_title(
+                lm.get("ui.hold_repeat.title", "Hold Repeat Speed (ms)")
+            )
+            self.hold_repeat_row.set_subtitle(
+                lm.get(
+                    "ui.hold_repeat.subtitle",
+                    "Time between steps while the key is held. Lower is faster.",
+                )
+            )
+            self.hold_repeat_row.connect("notify::value", self._on_hold_repeat_changed)
+            rows.append(self.hold_repeat_row)
+
         if self.SHOW_METERS_ROW:
             rows.append(meters_enabled_row)
 
@@ -871,6 +983,7 @@ class BaseAction(ActionBase):
         self._register_with_core()
 
     def on_disable(self):
+        self._hold_stop()
         self._unregister_from_core()
 
 
@@ -1040,6 +1153,8 @@ class KnobAction(BaseAction):
 class ButtonAction(BaseAction):
     """Volume button (positive step = up, negative step = down, zero = mute)"""
 
+    SHOW_HOLD_REPEAT_ROW = True
+
     ACTION_TYPE = ActionType.button()
     VOLUME_STEP_RANGE = (-20, 20)
     VOLUME_STEP_SUBTITLE = "Positive = vol up, Negative = vol down, Zero = mute toggle"
@@ -1121,14 +1236,18 @@ class ButtonAction(BaseAction):
         container.append(group)
 
     def event_callback(self, event: Any, data: Any):
-        if event == Input.Key.Events.SHORT_UP and self._device_id:
-            if self._volume_step == 0:
-                # Mute button
+        if not self._device_id:
+            self._hold_stop()
+            return
+        if self._volume_step == 0:
+            # Mute button: one toggle per tap, no repeat.
+            if event == Input.Key.Events.SHORT_UP:
                 self._core.toggle_mute(self._device_id, self._device_type)
-            else:
-                self._core.set_volume_relative(
-                    self._device_id, self._volume_step, self._device_type
-                )
+            return
+        device_id, step, device_type = self._device_id, self._volume_step, self._device_type
+        self._handle_hold_key(
+            event, lambda: self._core.set_volume_relative(device_id, step, device_type)
+        )
 
 
 class SourceSwitchButtonAction(ButtonAction):
@@ -1536,19 +1655,163 @@ class PhysicalSourceSwitchButtonAction(ButtonAction):
         )
 
 
+class RouteToggleButtonAction(ButtonAction):
+    """Button that turns the route from one source into one target on and off.
+
+    For example, a microphone into headphones, to hear yourself only when you want to.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._route_target_id: Optional[str] = None
+        self._route_target_name: Optional[str] = None
+        self.target_expander: Optional[Adw.ExpanderRow] = None
+
+    def _load_settings(self):
+        super()._load_settings()
+        settings = self.get_settings()
+        self._route_target_id = settings.get("route_target_id")
+        self._route_target_name = settings.get("route_target_name")
+
+    def _build_config(self) -> ActionConfig:
+        config = super()._build_config()
+        # Drawn as a toggle (no +/- symbol) that reads muted while the route is off.
+        config.volume_step = 0
+        config.route_target_id = self._route_target_id
+        return config
+
+    def _build_device_expander(self, title: str, subtitle: str, on_expanded, on_refresh):
+        lm = self.plugin_base.lm
+        expander = Adw.ExpanderRow()
+        expander.set_title(title)
+        expander.set_subtitle(subtitle)
+
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        container.set_margin_start(30)
+        container.set_margin_end(30)
+        container.set_margin_bottom(12)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_min_content_height(220)
+        scrolled.set_child(container)
+        expander.add_row(scrolled)
+        expander.connect("notify::expanded", on_expanded)
+
+        refresh = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text=lm.get("ui.refresh_devices.button"),
+        )
+        refresh.connect("clicked", on_refresh)
+        expander.add_suffix(refresh)
+        return expander, container
+
+    def get_config_rows(self):
+        lm = self.plugin_base.lm
+        self._load_settings()
+        self.source_expander = None
+        self.target_expander = None
+
+        if not self._core.is_available():
+            error_row = Adw.ActionRow()
+            error_row.set_title(lm.get("ui.error.not_running.title"))
+            error_row.set_subtitle(lm.get("ui.error.not_running.subtitle"))
+            error_row.add_css_class("warning")
+            return [error_row]
+
+        self.source_expander, self.route_source_container = self._build_device_expander(
+            lm.get("ui.route_source.title", "Source"),
+            self._device_name or lm.get("ui.route_source.none", "No source selected"),
+            lambda e, _: e.get_expanded() and self._populate_route_sources(),
+            lambda _b: self._populate_route_sources(),
+        )
+        self._populate_route_sources()
+
+        self.target_expander, self.route_target_container = self._build_device_expander(
+            lm.get("ui.route_target.title", "Target"),
+            self._route_target_name or lm.get("ui.route_target.none", "No target selected"),
+            lambda e, _: e.get_expanded() and self._populate_route_targets(),
+            lambda _b: self._populate_route_targets(),
+        )
+        self._populate_route_targets()
+
+        return [self.source_expander, self.target_expander, self._build_icon_row()]
+
+    def _populate_route_sources(self):
+        self._fill_device_container(
+            self.route_source_container,
+            self._core.get_sources(),
+            self._on_route_source_activated,
+            "ui.route_source.empty",
+            "Check that PipeWeaver is running",
+        )
+
+    def _populate_route_targets(self):
+        container = self.route_target_container
+        self._clear_box_children(container)
+        targets = self._core.get_targets()
+        if not targets:
+            row = Adw.ActionRow()
+            row.set_title(self.plugin_base.lm.get("ui.route_target.empty", "No targets found"))
+            row.set_subtitle("Check that PipeWeaver is running")
+            row.set_sensitive(False)
+            container.append(row)
+            return
+        group = Adw.PreferencesGroup()
+        group.set_margin_top(12)
+        group.set_margin_bottom(6)
+        for device in targets:
+            row = self._build_device_row(device, self._on_route_target_activated)
+            if device.id == self._route_target_id:
+                row.add_css_class("selected")
+            group.add(row)
+        container.append(group)
+
+    def _on_route_source_activated(self, row: Adw.ActionRow):
+        device = row.device_data
+        if not device:
+            return
+        self._set_selected_device(device)
+        if self.source_expander is not None:
+            self.source_expander.set_subtitle(device.name)
+        self._populate_route_sources()
+        self._update_config()
+
+    def _on_route_target_activated(self, row: Adw.ActionRow):
+        device = row.device_data
+        if not device:
+            return
+        self._route_target_id = device.id
+        self._route_target_name = device.name
+        self._persist_settings(route_target_id=device.id, route_target_name=device.name)
+        if self.target_expander is not None:
+            self.target_expander.set_subtitle(device.name)
+        self._populate_route_targets()
+        self._update_config()
+
+    def event_callback(self, event: Any, data: Any):
+        if event != Input.Key.Events.SHORT_UP:
+            return
+        if not self._device_id or not self._route_target_id:
+            return
+        self._core.toggle_route(self._device_id, self._route_target_id)
+
+
 class SliderAction(BaseAction):
     """Slider button (top/bottom half of virtual slider)"""
 
     ACTION_TYPE = ActionType.slider()
     VOLUME_STEP_RANGE = (-20, 20)
     VOLUME_STEP_SUBTITLE = "Positive = top slider, Negative = bottom"
+    SHOW_HOLD_REPEAT_ROW = True
     SHOW_METERS_ROW = True
 
     def _build_config(self) -> ActionConfig:
         config = super()._build_config()
         settings = self.get_settings()
         config.orientation = settings.get("orientation", "vertical")
-        config.is_top = self._volume_step > 0
+        config.is_top = self._slider_step() > 0
         return config
 
     def get_config_rows(self):
@@ -1578,10 +1841,13 @@ class SliderAction(BaseAction):
         self._update_config()
 
     def event_callback(self, event: Any, data: Any):
-        if event == Input.Key.Events.SHORT_UP and self._device_id:
-            self._core.set_volume_relative(
-                self._device_id, self._volume_step, self._device_type
-            )
+        if not self._device_id:
+            self._hold_stop()
+            return
+        device_id, step, device_type = self._device_id, self._slider_step(), self._device_type
+        self._handle_hold_key(
+            event, lambda: self._core.set_volume_relative(device_id, step, device_type)
+        )
 
 
 class AppActionMixin:
@@ -1752,6 +2018,8 @@ class AppKnobAction(AppActionMixin, BaseAction):
 class AppButtonAction(AppActionMixin, BaseAction):
     """Per-application volume on a key (positive = up, negative = down, zero = mute)."""
 
+    SHOW_HOLD_REPEAT_ROW = True
+
     ACTION_TYPE = ActionType.button()
     VOLUME_STEP_RANGE = (-20, 20)
     VOLUME_STEP_SUBTITLE = "Positive = vol up, Negative = vol down, Zero = mute toggle"
@@ -1762,11 +2030,17 @@ class AppButtonAction(AppActionMixin, BaseAction):
         )
 
     def event_callback(self, event: Any, data: Any):
-        if event == Input.Key.Events.SHORT_UP and self._device_id:
-            if self._volume_step == 0:
+        if not self._device_id:
+            self._hold_stop()
+            return
+        if self._volume_step == 0:
+            if event == Input.Key.Events.SHORT_UP:
                 self._core.toggle_app_mute(self._device_id)
-            else:
-                self._core.set_app_volume_relative(self._device_id, self._volume_step)
+            return
+        device_id, step = self._device_id, self._volume_step
+        self._handle_hold_key(
+            event, lambda: self._core.set_app_volume_relative(device_id, step)
+        )
 
 
 class AppSliderAction(AppActionMixin, BaseAction):
@@ -1775,13 +2049,14 @@ class AppSliderAction(AppActionMixin, BaseAction):
     ACTION_TYPE = ActionType.slider()
     VOLUME_STEP_RANGE = (-20, 20)
     VOLUME_STEP_SUBTITLE = "Positive = top slider, Negative = bottom"
+    SHOW_HOLD_REPEAT_ROW = True
     SHOW_METERS_ROW = True
 
     def _build_config(self) -> ActionConfig:
         config = super()._build_config()
         settings = self.get_settings()
         config.orientation = settings.get("orientation", "vertical")
-        config.is_top = self._volume_step > 0
+        config.is_top = self._slider_step() > 0
         return config
 
     def get_config_rows(self):
@@ -1808,5 +2083,10 @@ class AppSliderAction(AppActionMixin, BaseAction):
         self._update_config()
 
     def event_callback(self, event: Any, data: Any):
-        if event == Input.Key.Events.SHORT_UP and self._device_id:
-            self._core.set_app_volume_relative(self._device_id, self._volume_step)
+        if not self._device_id:
+            self._hold_stop()
+            return
+        device_id, step = self._device_id, self._slider_step()
+        self._handle_hold_key(
+            event, lambda: self._core.set_app_volume_relative(device_id, step)
+        )

@@ -22,6 +22,8 @@
     "actions.source_switch_button.tooltip": "Cambia el dispositivo físico conectado a una salida de hardware",
     "actions.slider.name": "Deslizador PipeWeaver",
     "actions.slider.tooltip": "Controla el audio de PipeWeaver con deslizador",
+    "actions.route_toggle_button.name": "Alternar ruta de PipeWeaver",
+    "actions.route_toggle_button.tooltip": "Activar o desactivar la ruta de una fuente a un destino",
     
     "ui.error.not_running.title": "PipeWeaver No Está Ejecutándose",
     "ui.error.not_running.subtitle": "Por favor inicia el demonio de PipeWeaver para configurar esta acción",
@@ -56,5 +58,13 @@
     
     "ui.choose_file.button": "Elegir Archivo",
     "ui.change_file.button": "Cambiar Archivo",
-    "ui.remove_icon.button": "Eliminar Icono"
+    "ui.remove_icon.button": "Eliminar Icono",
+    "ui.route_source.title": "Fuente",
+    "ui.route_source.none": "Ninguna fuente seleccionada",
+    "ui.route_source.empty": "No se encontraron fuentes",
+    "ui.route_target.title": "Destino",
+    "ui.route_target.none": "Ningún destino seleccionado",
+    "ui.route_target.empty": "No se encontraron destinos",
+    "ui.hold_repeat.title": "Velocidad de repetición al mantener (ms)",
+    "ui.hold_repeat.subtitle": "Tiempo entre pasos mientras se mantiene pulsada la tecla. Menor es más rápido."
 }

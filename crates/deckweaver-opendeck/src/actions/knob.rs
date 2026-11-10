@@ -22,7 +22,7 @@ impl Action for KnobAction {
     ) -> OpenActionResult<()> {
         let (width, height) = dimensions_for_instance(instance, ActionType::Knob);
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(false, 5, 1, 20);
+        settings.volume_step = Some(settings.normalized_volume_step(false, 5, 1, 20));
         register_instance(instance, ActionType::Knob, &settings, width, height);
         Ok(())
     }
@@ -42,7 +42,7 @@ impl Action for KnobAction {
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(false, 5, 1, 20);
+        settings.volume_step = Some(settings.normalized_volume_step(false, 5, 1, 20));
         update_instance(instance, ActionType::Knob, &settings);
         Ok(())
     }

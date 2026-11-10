@@ -19,7 +19,13 @@
   <section class="section">
     <label class="field-label" for="volumeStep">Volume step</label>
     <input id="volumeStep" type="number" min="-20" max="20" />
-    <p class="field-hint">Set to 0 to toggle mute on press.</p>
+    <p class="field-hint">Positive = top half (volume up), negative = bottom half (volume down). Hold the key to keep stepping.</p>
+  </section>
+
+  <section class="section">
+    <label class="field-label" for="holdRepeatMs">Hold repeat speed (ms)</label>
+    <input id="holdRepeatMs" type="number" min="50" max="1000" step="50" />
+    <p class="field-hint">Time between steps while the key is held. Lower is faster. Default 400.</p>
   </section>
 
   <section class="section">

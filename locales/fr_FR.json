@@ -22,6 +22,8 @@
     "actions.source_switch_button.tooltip": "Change le périphérique physique attaché à une sortie matérielle",
     "actions.slider.name": "Curseur PipeWeaver",
     "actions.slider.tooltip": "Contrôlez l'audio PipeWeaver avec curseur",
+    "actions.route_toggle_button.name": "Basculer la route PipeWeaver",
+    "actions.route_toggle_button.tooltip": "Activer ou désactiver la route d'une source vers une cible",
     
     "ui.error.not_running.title": "PipeWeaver N'est Pas En Cours",
     "ui.error.not_running.subtitle": "Veuillez démarrer le démon PipeWeaver pour configurer cette action",
@@ -56,5 +58,13 @@
     
     "ui.choose_file.button": "Choisir Fichier",
     "ui.change_file.button": "Changer Fichier",
-    "ui.remove_icon.button": "Supprimer Icône"
+    "ui.remove_icon.button": "Supprimer Icône",
+    "ui.route_source.title": "Source",
+    "ui.route_source.none": "Aucune source sélectionnée",
+    "ui.route_source.empty": "Aucune source trouvée",
+    "ui.route_target.title": "Cible",
+    "ui.route_target.none": "Aucune cible sélectionnée",
+    "ui.route_target.empty": "Aucune cible trouvée",
+    "ui.hold_repeat.title": "Vitesse de répétition au maintien (ms)",
+    "ui.hold_repeat.subtitle": "Temps entre les pas tant que la touche est maintenue. Plus bas est plus rapide."
 }

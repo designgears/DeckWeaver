@@ -22,6 +22,8 @@
     "actions.source_switch_button.tooltip": "Wechselt das physische Gerät eines Hardware-Ausgangsziels",
     "actions.slider.name": "PipeWeaver Schieberegler",
     "actions.slider.tooltip": "PipeWeaver Audio mit Schieberegler steuern",
+    "actions.route_toggle_button.name": "PipeWeaver Routing umschalten",
+    "actions.route_toggle_button.tooltip": "Routing von einer Quelle zu einem Ziel ein- oder ausschalten",
     
     "ui.error.not_running.title": "PipeWeaver Läuft Nicht",
     "ui.error.not_running.subtitle": "Bitte starten Sie den PipeWeaver Daemon um diese Aktion zu konfigurieren",
@@ -56,5 +58,13 @@
     
     "ui.choose_file.button": "Datei Wählen",
     "ui.change_file.button": "Datei Ändern",
-    "ui.remove_icon.button": "Icon Entfernen"
+    "ui.remove_icon.button": "Icon Entfernen",
+    "ui.route_source.title": "Quelle",
+    "ui.route_source.none": "Keine Quelle ausgewählt",
+    "ui.route_source.empty": "Keine Quellen gefunden",
+    "ui.route_target.title": "Ziel",
+    "ui.route_target.none": "Kein Ziel ausgewählt",
+    "ui.route_target.empty": "Keine Ziele gefunden",
+    "ui.hold_repeat.title": "Wiederholrate beim Halten (ms)",
+    "ui.hold_repeat.subtitle": "Zeit zwischen den Schritten, solange die Taste gehalten wird. Kleiner ist schneller."
 }

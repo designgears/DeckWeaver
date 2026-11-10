@@ -128,6 +128,9 @@ pub struct ActionConfig {
     pub mute_profile_data: Vec<bool>,
     #[pyo3(get, set)]
     pub show_volume: bool,
+    /// Route toggle only: the target whose route from `device_id` the key flips.
+    #[pyo3(get, set)]
+    pub route_target_id: Option<String>,
 }
 
 #[pymethods]
@@ -181,6 +184,7 @@ impl ActionConfig {
             mute_profile_muted: core.mute_profile_muted,
             mute_profile_data: core.mute_profile_data,
             show_volume: core.show_volume,
+            route_target_id: core.route_target_id,
         }
     }
 
@@ -209,6 +213,7 @@ impl ActionConfig {
             show_volume: self.show_volume,
             routed_to: None,
             app_icon_path: None,
+            route_target_id: self.route_target_id.clone(),
         }
     }
 }
@@ -716,6 +721,18 @@ impl DeckWeaverCore {
 
     fn toggle_mute_profile(&self, config: &ActionConfig) -> Option<bool> {
         self.inner.toggle_mute_profile(&config.to_core())
+    }
+
+    fn is_routed(&self, source_id: &str, target_id: &str) -> Option<bool> {
+        self.inner.is_routed(source_id, target_id)
+    }
+
+    fn set_route(&self, source_id: &str, target_id: &str, enabled: bool) -> bool {
+        self.inner.set_route(source_id, target_id, enabled)
+    }
+
+    fn toggle_route(&self, source_id: &str, target_id: &str) -> bool {
+        self.inner.toggle_route(source_id, target_id)
     }
 
     fn switch_output_hardware_device(&self, target_id: &str, node_id: u32) -> bool {

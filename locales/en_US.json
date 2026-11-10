@@ -31,6 +31,8 @@
     "actions.app_button.tooltip": "Volume up, down, or mute one application with a button",
     "actions.app_slider.name": "App Volume Slider",
     "actions.app_slider.tooltip": "Control one application's volume with a slider",
+    "actions.route_toggle_button.name": "PipeWeaver Route Toggle",
+    "actions.route_toggle_button.tooltip": "Turn the route from a source into a target on or off",
 
     "ui.error.not_running.title": "PipeWeaver Not Running",
     "ui.error.not_running.subtitle": "Please start PipeWeaver daemon to configure this action",
@@ -73,5 +75,13 @@
     
     "ui.choose_file.button": "Choose File",
     "ui.change_file.button": "Change File",
-    "ui.remove_icon.button": "Remove Icon"
+    "ui.remove_icon.button": "Remove Icon",
+    "ui.route_source.title": "Source",
+    "ui.route_source.none": "No source selected",
+    "ui.route_source.empty": "No sources found",
+    "ui.route_target.title": "Target",
+    "ui.route_target.none": "No target selected",
+    "ui.route_target.empty": "No targets found",
+    "ui.hold_repeat.title": "Hold Repeat Speed (ms)",
+    "ui.hold_repeat.subtitle": "Time between steps while the key is held. Lower is faster."
 }

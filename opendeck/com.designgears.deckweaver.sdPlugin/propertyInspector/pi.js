@@ -271,6 +271,10 @@ function initActionInspector(options) {
   document.getElementById("volumeStep")?.addEventListener("change", (event) => {
     saveSettings({ volume_step: Number(event.target.value) });
   });
+  document.getElementById("holdRepeatMs")?.addEventListener("change", (event) => {
+    const value = Math.round(Number(event.target.value));
+    saveSettings({ hold_repeat_ms: Number.isFinite(value) && value > 0 ? value : null });
+  });
   document.getElementById("orientation")?.addEventListener("change", (event) => {
     saveSettings({ orientation: event.target.value });
   });
@@ -311,6 +315,8 @@ function populateFromSettings() {
     volumeStep.max = String(options.maxVolumeStep ?? 20);
     volumeStep.value = String(settings.volume_step ?? options.defaultVolumeStep ?? 5);
   }
+  const holdRepeatMs = document.getElementById("holdRepeatMs");
+  if (holdRepeatMs) holdRepeatMs.value = String(settings.hold_repeat_ms ?? 400);
   const sourceMix = document.getElementById("sourceMix");
   if (sourceMix) sourceMix.value = settings.source_mix || "A";
   const orientation = document.getElementById("orientation");
@@ -340,6 +346,12 @@ function handlePluginMessage(payload) {
 
   if (window.deckweaverSwitchMode === true || window.deckweaverSwitchMode === false) {
     handleSwitchDevices(payload);
+    return;
+  }
+
+  if (window.deckweaverRouteMode) {
+    populateDeviceSelect(document.getElementById("routeSource"), payload.sources || [], settings.device_id);
+    populateDeviceSelect(document.getElementById("routeTarget"), payload.targets || [], settings.route_target_id);
     return;
   }
 
@@ -447,6 +459,10 @@ function initAppInspector(options) {
   document.getElementById("volumeStep")?.addEventListener("change", (event) => {
     saveSettings({ volume_step: Number(event.target.value) });
   });
+  document.getElementById("holdRepeatMs")?.addEventListener("change", (event) => {
+    const value = Math.round(Number(event.target.value));
+    saveSettings({ hold_repeat_ms: Number.isFinite(value) && value > 0 ? value : null });
+  });
   document.getElementById("orientation")?.addEventListener("change", (event) => {
     saveSettings({ orientation: event.target.value });
   });
@@ -473,5 +489,20 @@ function initSourceSwitchInspector({ inputMode }) {
       hardware_device_node_id: selected?.value ? Number(selected.value) : null,
       hardware_device_description: selected?.dataset.description || null,
     });
+  });
+}
+
+// Route toggle: one source and one target; the key turns that route on and off.
+function initRouteToggleInspector() {
+  window.deckweaverRouteMode = true;
+  wireFaIconPicker();
+  document.getElementById("refresh")?.addEventListener("click", () => {
+    websocket?.send(JSON.stringify({ event: "sendToPlugin", context: uuid, payload: { event: "refreshDevices" } }));
+  });
+  document.getElementById("routeSource")?.addEventListener("change", (event) => {
+    saveSettings({ device_id: event.target.value || null, device_type: "source" });
+  });
+  document.getElementById("routeTarget")?.addEventListener("change", (event) => {
+    saveSettings({ route_target_id: event.target.value || null });
   });
 }

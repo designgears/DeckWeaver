@@ -166,6 +166,14 @@ impl Status {
         sources
     }
 
+    /// Whether audio from `source_id` is currently routed into `target_id`.
+    pub fn is_routed(&self, source_id: &str, target_id: &str) -> bool {
+        self.audio.profile.routes.iter().any(|(source, targets)| {
+            source.to_string() == source_id
+                && targets.iter().any(|target| target.to_string() == target_id)
+        })
+    }
+
     pub fn get_output_hardware_devices(&self) -> Vec<HardwareDevice> {
         self.audio.devices[PipeweaverDeviceType::Target]
             .iter()
@@ -655,6 +663,21 @@ fn resolve_pointer_parent<'a>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const MIC: &str = "01HZX0000000000000000000M1";
+    const PHONES: &str = "01HZX0000000000000000000P1";
+    const SPEAKERS: &str = "01HZX0000000000000000000S1";
+
+    #[test]
+    fn is_routed_reads_the_profile_route_map() {
+        let mut status = Status::default();
+        status.audio.profile.routes =
+            serde_json::from_value(json!({ MIC: [PHONES] })).expect("route map");
+
+        assert!(status.is_routed(MIC, PHONES));
+        assert!(!status.is_routed(MIC, SPEAKERS));
+        assert!(!status.is_routed(PHONES, MIC));
+    }
 
     #[test]
     fn test_device_type() {

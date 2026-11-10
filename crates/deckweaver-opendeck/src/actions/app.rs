@@ -27,6 +27,19 @@ fn apply_step(settings: &ActionSettings, step: i8, ticks: i16) {
     }
 }
 
+/// Step once on press and keep stepping while the key is held. A step of 0 is a mute toggle,
+/// handled on release instead, so it never repeats.
+fn start_hold(instance: &Instance, settings: &ActionSettings, step: i8) {
+    if step == 0 || settings.device_id.is_none() {
+        return;
+    }
+    let interval = settings.hold_repeat_interval();
+    let settings = settings.clone();
+    crate::key_repeat::start(instance.instance_id.to_string(), interval, move || {
+        apply_step(&settings, step, 1);
+    });
+}
+
 pub struct AppKnobAction;
 
 #[async_trait]
@@ -41,7 +54,7 @@ impl Action for AppKnobAction {
     ) -> OpenActionResult<()> {
         let (width, height) = dimensions_for_instance(instance, ActionType::Knob);
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(false, 5, 1, 20);
+        settings.volume_step = Some(settings.normalized_volume_step(false, 5, 1, 20));
         register_instance(instance, ActionType::Knob, &settings, width, height);
         Ok(())
     }
@@ -51,6 +64,7 @@ impl Action for AppKnobAction {
         instance: &Instance,
         _settings: &Self::Settings,
     ) -> OpenActionResult<()> {
+        crate::key_repeat::stop(&instance.instance_id.to_string());
         unregister_instance(instance);
         Ok(())
     }
@@ -61,7 +75,7 @@ impl Action for AppKnobAction {
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(false, 5, 1, 20);
+        settings.volume_step = Some(settings.normalized_volume_step(false, 5, 1, 20));
         crate::shared::update_instance(instance, ActionType::Knob, &settings);
         Ok(())
     }
@@ -138,7 +152,7 @@ impl Action for AppButtonAction {
     ) -> OpenActionResult<()> {
         let (width, height) = dimensions_for_instance(instance, ActionType::Button);
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(true, 5, -20, 20);
+        settings.volume_step = Some(settings.normalized_volume_step(true, 5, -20, 20));
         register_instance(instance, ActionType::Button, &settings, width, height);
         Ok(())
     }
@@ -148,6 +162,7 @@ impl Action for AppButtonAction {
         instance: &Instance,
         _settings: &Self::Settings,
     ) -> OpenActionResult<()> {
+        crate::key_repeat::stop(&instance.instance_id.to_string());
         unregister_instance(instance);
         Ok(())
     }
@@ -158,18 +173,31 @@ impl Action for AppButtonAction {
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(true, 5, -20, 20);
+        settings.volume_step = Some(settings.normalized_volume_step(true, 5, -20, 20));
         crate::shared::update_instance(instance, ActionType::Button, &settings);
         Ok(())
     }
 
-    async fn key_up(
+    async fn key_down(
         &self,
-        _instance: &Instance,
+        instance: &Instance,
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
         let step = settings.normalized_volume_step(true, 5, -20, 20);
-        apply_step(settings, step, 1);
+        start_hold(instance, settings, step);
+        Ok(())
+    }
+
+    /// A step of 0 makes the key a mute toggle, which fires once on release.
+    async fn key_up(
+        &self,
+        instance: &Instance,
+        settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
+        crate::key_repeat::stop(&instance.instance_id.to_string());
+        if settings.normalized_volume_step(true, 5, -20, 20) == 0 {
+            apply_step(settings, 0, 1);
+        }
         Ok(())
     }
 
@@ -205,7 +233,7 @@ impl Action for AppSliderAction {
     ) -> OpenActionResult<()> {
         let (width, height) = dimensions_for_instance(instance, ActionType::Slider);
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(true, 5, -20, 20);
+        settings.volume_step = Some(settings.slider_volume_step());
         register_instance(instance, ActionType::Slider, &settings, width, height);
         Ok(())
     }
@@ -215,6 +243,7 @@ impl Action for AppSliderAction {
         instance: &Instance,
         _settings: &Self::Settings,
     ) -> OpenActionResult<()> {
+        crate::key_repeat::stop(&instance.instance_id.to_string());
         unregister_instance(instance);
         Ok(())
     }
@@ -225,18 +254,26 @@ impl Action for AppSliderAction {
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(true, 5, -20, 20);
+        settings.volume_step = Some(settings.slider_volume_step());
         crate::shared::update_instance(instance, ActionType::Slider, &settings);
+        Ok(())
+    }
+
+    async fn key_down(
+        &self,
+        instance: &Instance,
+        settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
+        start_hold(instance, settings, settings.slider_volume_step());
         Ok(())
     }
 
     async fn key_up(
         &self,
-        _instance: &Instance,
-        settings: &Self::Settings,
+        instance: &Instance,
+        _settings: &Self::Settings,
     ) -> OpenActionResult<()> {
-        let step = settings.normalized_volume_step(true, 5, -20, 20);
-        apply_step(settings, step, 1);
+        crate::key_repeat::stop(&instance.instance_id.to_string());
         Ok(())
     }
 

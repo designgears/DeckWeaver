@@ -39,7 +39,7 @@
       "SupportedInMultiActions": true,
       "Tooltip": "Volume up, down, or mute on press",
       "UUID": "com.designgears.deckweaver.button",
-      "PropertyInspectorPath": "propertyInspector/action.html"
+      "PropertyInspectorPath": "propertyInspector/button.html"
     },
     {
       "Icon": "icons/button",
@@ -60,6 +60,16 @@
       "Tooltip": "Switch hardware input routing",
       "UUID": "com.designgears.deckweaver.physicalsourceswitch",
       "PropertyInspectorPath": "propertyInspector/physicalSourceSwitch.html"
+    },
+    {
+      "Icon": "icons/button",
+      "Name": "DeckWeaver Route Toggle",
+      "States": [{ "Image": "actionDefaultImage" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Turn the route from a source into a target on or off",
+      "UUID": "com.designgears.deckweaver.routetoggle",
+      "PropertyInspectorPath": "propertyInspector/routeToggle.html"
     },
     {
       "Icon": "icons/slider",

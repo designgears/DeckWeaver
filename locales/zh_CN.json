@@ -22,6 +22,8 @@
     "actions.source_switch_button.tooltip": "切换连接到硬件输出目标的物理设备",
     "actions.slider.name": "PipeWeaver 滑块",
     "actions.slider.tooltip": "使用滑块控制 PipeWeaver 音频",
+    "actions.route_toggle_button.name": "PipeWeaver 路由开关",
+    "actions.route_toggle_button.tooltip": "开启或关闭从音源到目标的路由",
     
     "ui.error.not_running.title": "PipeWeaver 未运行",
     "ui.error.not_running.subtitle": "请启动 PipeWeaver 守护进程以配置此操作",
@@ -56,5 +58,13 @@
     
     "ui.choose_file.button": "选择文件",
     "ui.change_file.button": "更改文件",
-    "ui.remove_icon.button": "移除图标"
+    "ui.remove_icon.button": "移除图标",
+    "ui.route_source.title": "音源",
+    "ui.route_source.none": "未选择音源",
+    "ui.route_source.empty": "未找到音源",
+    "ui.route_target.title": "目标",
+    "ui.route_target.none": "未选择目标",
+    "ui.route_target.empty": "未找到目标",
+    "ui.hold_repeat.title": "按住重复速度（毫秒）",
+    "ui.hold_repeat.subtitle": "按住按键时每步之间的间隔。数值越小越快。"
 }

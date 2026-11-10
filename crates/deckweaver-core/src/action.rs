@@ -41,6 +41,9 @@ pub struct ActionConfig {
     /// per-frame config clone carries them, and so the render caches key off them.
     pub routed_to: Option<String>,
     pub app_icon_path: Option<String>,
+    /// Route toggle only: the target whose route from `device_id` (a source) the key flips. The
+    /// key renders as a toggle that reads muted while the route is off.
+    pub route_target_id: Option<String>,
 }
 
 impl ActionConfig {
@@ -69,6 +72,7 @@ impl ActionConfig {
             show_volume: true,
             routed_to: None,
             app_icon_path: None,
+            route_target_id: None,
         }
     }
 }
@@ -142,6 +146,7 @@ impl ActionState {
         self.config.icon_path.hash(&mut hasher);
         self.config.app_icon_path.hash(&mut hasher);
         self.config.routed_to.hash(&mut hasher);
+        self.config.route_target_id.hash(&mut hasher);
         if self.config.action_type == crate::action::ActionType::Slider {
             self.config.orientation.hash(&mut hasher);
             self.config.is_top.hash(&mut hasher);
@@ -253,6 +258,7 @@ impl ActionState {
         self.config.device_id.hash(&mut hasher);
         self.config.device_type.hash(&mut hasher);
         self.config.routed_to.hash(&mut hasher);
+        self.config.route_target_id.hash(&mut hasher);
         self.config.app_icon_path.hash(&mut hasher);
         self.config.meters_enabled.hash(&mut hasher);
         self.config.orientation.hash(&mut hasher);

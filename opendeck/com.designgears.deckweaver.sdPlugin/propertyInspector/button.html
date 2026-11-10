@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DeckWeaver Volume</title>
+  <link rel="stylesheet" href="pi.css" />
+  <script src="pi.js"></script>
+</head>
+<body class="pi">
+  <div id="status" class="status">Connecting…</div>
+
+  <div id="iconPickerMount"></div>
+
+  <section class="section">
+    <label class="field-label" for="device">PipeWeaver device</label>
+    <select id="device"></select>
+  </section>
+
+  <section class="section">
+    <label class="field-label" for="volumeStep">Volume step</label>
+    <input id="volumeStep" type="number" min="-20" max="20" />
+    <p class="field-hint">Positive raises the volume, negative lowers it; hold the key to keep stepping. Set to 0 to toggle mute on press.</p>
+  </section>
+
+  <section class="section">
+    <label class="field-label" for="holdRepeatMs">Hold repeat speed (ms)</label>
+    <input id="holdRepeatMs" type="number" min="50" max="1000" step="50" />
+    <p class="field-hint">Time between steps while the key is held. Lower is faster. Default 400.</p>
+  </section>
+
+  <footer class="pi-footer">
+    <button id="refresh" type="button" class="btn-secondary">Refresh devices</button>
+  </footer>
+
+  <script>
+    initActionInspector({
+      signedVolumeStep: true,
+      showSourceMix: false,
+      defaultVolumeStep: 5,
+      minVolumeStep: -20,
+      maxVolumeStep: 20,
+    });
+  </script>
+</body>
+</html>

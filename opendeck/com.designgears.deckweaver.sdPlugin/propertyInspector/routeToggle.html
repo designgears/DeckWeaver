@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DeckWeaver Route Toggle</title>
+  <link rel="stylesheet" href="pi.css" />
+  <script src="pi.js"></script>
+</head>
+<body class="pi">
+  <div id="status" class="status">Connecting…</div>
+
+  <div id="iconPickerMount"></div>
+
+  <section class="section">
+    <label class="field-label" for="routeSource">Source</label>
+    <select id="routeSource"></select>
+  </section>
+
+  <section class="section">
+    <label class="field-label" for="routeTarget">Target</label>
+    <select id="routeTarget"></select>
+    <p class="field-hint">Pressing the key turns the route from this source into this target on or off. A slash means the route is off.</p>
+  </section>
+
+  <footer class="pi-footer">
+    <button id="refresh" type="button" class="btn-secondary">Refresh devices</button>
+  </footer>
+
+  <script>
+    initRouteToggleInspector();
+  </script>
+</body>
+</html>

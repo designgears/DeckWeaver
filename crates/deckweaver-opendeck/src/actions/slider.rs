@@ -20,7 +20,7 @@ impl Action for SliderAction {
     ) -> OpenActionResult<()> {
         let (width, height) = dimensions_for_instance(instance, ActionType::Slider);
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(true, 5, -20, 20);
+        settings.volume_step = Some(settings.slider_volume_step());
         register_instance(instance, ActionType::Slider, &settings, width, height);
         Ok(())
     }
@@ -30,6 +30,7 @@ impl Action for SliderAction {
         instance: &Instance,
         _settings: &Self::Settings,
     ) -> OpenActionResult<()> {
+        crate::key_repeat::stop(&instance.instance_id.to_string());
         unregister_instance(instance);
         Ok(())
     }
@@ -40,29 +41,40 @@ impl Action for SliderAction {
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(true, 5, -20, 20);
+        settings.volume_step = Some(settings.slider_volume_step());
         update_instance(instance, ActionType::Slider, &settings);
+        Ok(())
+    }
+
+    /// Steps on press and repeats while held; see [`crate::key_repeat`].
+    async fn key_down(
+        &self,
+        instance: &Instance,
+        settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
+        let Some(device_id) = settings.device_id.clone() else {
+            return Ok(());
+        };
+        let step = settings.slider_volume_step();
+        let device_type = settings.device_type.as_deref().map(|t| match t {
+            "source" => deckweaver_core::DeviceType::Source,
+            _ => deckweaver_core::DeviceType::Target,
+        });
+        let interval = settings.hold_repeat_interval();
+        crate::key_repeat::start(instance.instance_id.to_string(), interval, move || {
+            crate::shared::core()
+                .lock()
+                .set_volume_relative(&device_id, step, device_type);
+        });
         Ok(())
     }
 
     async fn key_up(
         &self,
-        _instance: &Instance,
-        settings: &Self::Settings,
+        instance: &Instance,
+        _settings: &Self::Settings,
     ) -> OpenActionResult<()> {
-        let Some(device_id) = settings.device_id.as_deref() else {
-            return Ok(());
-        };
-        let step = settings.normalized_volume_step(true, 5, -20, 20);
-        let core_arc = crate::shared::core();
-        core_arc.lock().set_volume_relative(
-            device_id,
-            step,
-            settings.device_type.as_deref().map(|t| match t {
-                "source" => deckweaver_core::DeviceType::Source,
-                _ => deckweaver_core::DeviceType::Target,
-            }),
-        );
+        crate::key_repeat::stop(&instance.instance_id.to_string());
         Ok(())
     }
 

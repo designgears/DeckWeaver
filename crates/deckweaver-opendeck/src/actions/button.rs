@@ -20,7 +20,7 @@ impl Action for ButtonAction {
     ) -> OpenActionResult<()> {
         let (width, height) = dimensions_for_instance(instance, ActionType::Button);
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(true, 5, -20, 20);
+        settings.volume_step = Some(settings.normalized_volume_step(true, 5, -20, 20));
         register_instance(instance, ActionType::Button, &settings, width, height);
         Ok(())
     }
@@ -30,6 +30,7 @@ impl Action for ButtonAction {
         instance: &Instance,
         _settings: &Self::Settings,
     ) -> OpenActionResult<()> {
+        crate::key_repeat::stop(&instance.instance_id.to_string());
         unregister_instance(instance);
         Ok(())
     }
@@ -40,39 +41,48 @@ impl Action for ButtonAction {
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
         let mut settings = settings.clone();
-        settings.volume_step = settings.normalized_volume_step(true, 5, -20, 20);
+        settings.volume_step = Some(settings.normalized_volume_step(true, 5, -20, 20));
         update_instance(instance, ActionType::Button, &settings);
         Ok(())
     }
 
-    async fn key_up(
+    /// Volume steps happen on press and repeat while the key is held; see [`crate::key_repeat`].
+    async fn key_down(
         &self,
-        _instance: &Instance,
+        instance: &Instance,
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
-        let Some(device_id) = settings.device_id.as_deref() else {
+        let Some(device_id) = settings.device_id.clone() else {
             return Ok(());
         };
         let step = settings.normalized_volume_step(true, 5, -20, 20);
-        let core_arc = crate::shared::core();
-        let core = core_arc.lock();
         if step == 0 {
-            core.toggle_mute(
-                device_id,
-                settings.device_type.as_deref().map(|t| match t {
-                    "source" => deckweaver_core::DeviceType::Source,
-                    _ => deckweaver_core::DeviceType::Target,
-                }),
-            );
-        } else {
-            core.set_volume_relative(
-                device_id,
-                step,
-                settings.device_type.as_deref().map(|t| match t {
-                    "source" => deckweaver_core::DeviceType::Source,
-                    _ => deckweaver_core::DeviceType::Target,
-                }),
-            );
+            return Ok(());
+        }
+        let device_type = parse_device_type(settings);
+        let interval = settings.hold_repeat_interval();
+        crate::key_repeat::start(instance.instance_id.to_string(), interval, move || {
+            crate::shared::core()
+                .lock()
+                .set_volume_relative(&device_id, step, device_type);
+        });
+        Ok(())
+    }
+
+    /// A step of 0 makes the key a mute toggle, which fires once on release.
+    async fn key_up(
+        &self,
+        instance: &Instance,
+        settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
+        crate::key_repeat::stop(&instance.instance_id.to_string());
+        let Some(device_id) = settings.device_id.as_deref() else {
+            return Ok(());
+        };
+        if settings.normalized_volume_step(true, 5, -20, 20) == 0 {
+            crate::shared::core()
+                .lock()
+                .toggle_mute(device_id, parse_device_type(settings));
         }
         Ok(())
     }
@@ -93,4 +103,11 @@ impl Action for ButtonAction {
     ) -> OpenActionResult<()> {
         crate::shared::handle_pi_message(instance, ActionType::Button, settings, payload).await
     }
+}
+
+fn parse_device_type(settings: &ActionSettings) -> Option<deckweaver_core::DeviceType> {
+    settings.device_type.as_deref().map(|t| match t {
+        "source" => deckweaver_core::DeviceType::Source,
+        _ => deckweaver_core::DeviceType::Target,
+    })
 }

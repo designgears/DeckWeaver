@@ -1,11 +1,12 @@
 mod actions;
 mod fa_icons;
+mod key_repeat;
 mod knob_touch;
 mod shared;
 
 use actions::{
     AppButtonAction, AppKnobAction, AppSliderAction, ButtonAction, KnobAction,
-    PhysicalSourceSwitchAction, SliderAction, SourceSwitchAction,
+    PhysicalSourceSwitchAction, RouteToggleAction, SliderAction, SourceSwitchAction,
 };
 use openaction::*;
 
@@ -27,6 +28,7 @@ async fn main() -> OpenActionResult<()> {
     register_action(ButtonAction).await;
     register_action(SourceSwitchAction).await;
     register_action(PhysicalSourceSwitchAction).await;
+    register_action(RouteToggleAction).await;
     register_action(SliderAction).await;
     register_action(AppKnobAction).await;
     register_action(AppButtonAction).await;

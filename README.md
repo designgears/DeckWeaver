@@ -12,7 +12,9 @@ PipeWeaver is a virtual audio routing system that allows you to create and manag
 
 ### Core Functionality
 - **Volume Control**: Adjust audio levels with precise steps (5-20% per step, configurable)
-- **Mute Toggle**: Quickly mute/unmute audio devices with visual feedback
+- **Mute Toggle**: Quickly mute/unmute audio devices (sources and targets) with visual feedback
+- **Press and Hold**: Volume and slider keys keep stepping while held, at a per-key adjustable speed ("Hold repeat speed", 50–1000 ms between steps)
+- **Route Toggle**: Turn the route from a source into a target on or off with one key (e.g. hear your microphone in your headphones only when you want to)
 - **Device Selection**: Control any available PipeWeaver virtual device (source or target)
 - **Hardware Output Switching**: Reassign a hardware output target to a selected physical output device with a dedicated button
 - **Real-time Feedback**: Visual indicators show current audio levels, mute status, and device state
@@ -99,6 +101,8 @@ The Python extension uses PyO3's abi3 stable ABI and works on **any Python 3.11+
 - **Turn dial clockwise**: Increase volume by configured step amount
 - **Turn dial counter-clockwise**: Decrease volume by configured step amount
 - **Press dial**: Toggle mute/unmute
+- **Volume key**: Positive step raises the volume, negative lowers it, `0` makes it a mute toggle. Hold the key to keep stepping.
+- **Route Toggle key**: Turns the selected source → target route on or off; the key shows a slash while the route is off
 
 ### Configuration Options
 - **Device Selection**: Choose audio device from available PipeWeaver devices (with refresh button)
@@ -109,6 +113,7 @@ The Python extension uses PyO3's abi3 stable ABI and works on **any Python 3.11+
 - **Volume Bar Color**: Override volume bar color or use device color automatically
 - **Language**: Set interface language or use OS default (in plugin settings)
 - **Output Device Switch Button**: Pick a hardware output target and the physical device that should be attached when pressed
+- **Route Toggle Button**: Pick a source and a target; each press routes or un-routes that source into that target
 
 ## Device Types
 
