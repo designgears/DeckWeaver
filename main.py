@@ -348,6 +348,11 @@ class BaseAction(ActionBase):
         self._icon_path: Optional[str] = None
         self._device_type: Optional[DeviceType] = None
         self._source_mix = "A"
+        # Read by _build_config for every knob-type action. Only KnobAction loads real values;
+        # the app knob has no mute profiles, and without these defaults its config build raised
+        # AttributeError, so the App Volume Knob never registered with the core.
+        self._mute_profile_index = 0
+        self._mute_profile_data: list[bool] = [False, False]
         self.device_expander: Optional[Adw.ExpanderRow] = None
         self.icon_row: Optional[Adw.ActionRow] = None
         self.icon_preview: Optional[Gtk.Image] = None
@@ -1064,8 +1069,6 @@ class KnobAction(BaseAction):
         self._pending_touch_tap_count = 0
         self._pending_touch_timeout_id: Optional[int] = None
         self._last_touch_tap_ts = 0.0
-        self._mute_profile_index = 0
-        self._mute_profile_data: list[bool] = [False, False]
 
     def _load_settings(self):
         super()._load_settings()

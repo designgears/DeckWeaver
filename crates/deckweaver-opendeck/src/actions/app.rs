@@ -43,7 +43,7 @@ impl DeckAction for AppKnobAction {
             let step = settings.knob_volume_step() as i16;
             crate::shared::core()
                 .lock()
-                .set_app_volume_relative(device_id, step * ticks);
+                .set_app_volume_relative(device_id, step.saturating_mul(ticks));
         }
         Ok(())
     }
