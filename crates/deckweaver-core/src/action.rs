@@ -86,7 +86,9 @@ impl ActionConfig {
     }
 }
 
-/// The live device fields every renderer draws from, shared by the frame and base hashes.
+/// The live device fields every renderer draws from, shared by the frame and base hashes. Anything
+/// a renderer reads off the device belongs here: a field left out only reaches the deck when some
+/// other field happens to change (a colour changed in PipeWeaver used to wait for a volume change).
 fn hash_device_state(device: &Device, hasher: &mut DefaultHasher) {
     device.name.hash(hasher);
     device.volume.hash(hasher);
@@ -95,6 +97,7 @@ fn hash_device_state(device: &Device, hasher: &mut DefaultHasher) {
     device.source_mix_b_muted.hash(hasher);
     device.source_volumes_linked.hash(hasher);
     device.target_mix_b.hash(hasher);
+    device.color.hash(hasher);
 }
 
 #[derive(Debug, Clone)]
@@ -144,11 +147,6 @@ impl ActionState {
             // The knob renderer draws the device name into the base image, so a rename has to
             // invalidate the cached base.
             hash_device_state(device, &mut hasher);
-            if let Some(color) = &device.color {
-                color.red.hash(&mut hasher);
-                color.green.hash(&mut hasher);
-                color.blue.hash(&mut hasher);
-            }
         }
         self.config.volume_bar_color.hash(&mut hasher);
         self.config.meter_color.hash(&mut hasher);
@@ -358,6 +356,30 @@ mod tests {
         assert!(!state.needs_base_rebuild());
 
         state.device = Some(device("Game"));
+        assert!(state.needs_render());
+        assert!(state.needs_base_rebuild());
+    }
+
+    /// Recolouring a device in PipeWeaver has to redraw at once, like a volume change: the knob's
+    /// bar and the slider's fill are drawn in the device colour.
+    #[test]
+    fn colour_change_triggers_render_and_base_rebuild() {
+        use crate::devices::DeviceColor;
+        let mut state = ActionState::new(config());
+        let mut dev = device("Chat");
+        dev.color = Some(DeviceColor { red: 40, green: 160, blue: 220 });
+        state.device = Some(dev.clone());
+        assert!(state.needs_render());
+        assert!(!state.needs_render());
+
+        let base_hash = state.base_hash();
+        *state.cached_base.write() = Some(CachedBaseRender {
+            pixmap: tiny_skia::Pixmap::new(200, 100).unwrap(),
+            base_hash,
+        });
+
+        dev.color = Some(DeviceColor { red: 220, green: 40, blue: 40 });
+        state.device = Some(dev);
         assert!(state.needs_render());
         assert!(state.needs_base_rebuild());
     }
