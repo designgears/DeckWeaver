@@ -11,7 +11,6 @@ except ImportError as exc:
 
 # Re-export public API
 VERSION = _core.VERSION
-DEFAULT_PORT = _core.DEFAULT_PORT
 FOCUSED_DEVICE_ID = _core.FOCUSED_DEVICE_ID
 DeckWeaverCore = _core.DeckWeaverCore
 ActionConfig = _core.ActionConfig
@@ -21,16 +20,11 @@ Device = _core.Device
 DeviceColor = _core.DeviceColor
 DeviceType = _core.DeviceType
 HardwareDevice = _core.HardwareDevice
-KnobRenderer = _core.KnobRenderer
-SliderRenderer = _core.SliderRenderer
-ButtonRenderer = _core.ButtonRenderer
-load_icon_to_png = _core.load_icon_to_png
 action_dimensions = _core.action_dimensions
 
 __version__ = VERSION
 __all__ = [
     "VERSION",
-    "DEFAULT_PORT",
     "FOCUSED_DEVICE_ID",
     "DeckWeaverCore",
     "ActionConfig",
@@ -40,9 +34,5 @@ __all__ = [
     "DeviceColor",
     "DeviceType",
     "HardwareDevice",
-    "KnobRenderer",
-    "SliderRenderer",
-    "ButtonRenderer",
-    "load_icon_to_png",
     "action_dimensions",
 ]

@@ -1,15 +1,15 @@
 //! PyO3 wrappers around deckweaver-core.
 
+//!
+//! main.py is the only consumer, so this exposes just what it uses; the two change together.
+
 use deckweaver_core::{
-    action_dimensions as core_action_dimensions, load_icon_to_png_bytes, ActionConfig as CoreActionConfig,
-    ActionType as CoreActionType, ButtonRenderer as CoreButtonRenderer,
-    ControllerKind, DeckWeaverCore as CoreEngine, Device as CoreDevice,
-    DeviceColor as CoreDeviceColor, DeviceType as CoreDeviceType,
-    HardwareDevice as CoreHardwareDevice, KnobRenderer as CoreKnobRenderer,
-    SliderRenderer as CoreSliderRenderer, DEFAULT_PORT, VERSION,
+    action_dimensions as core_action_dimensions, ActionConfig as CoreActionConfig,
+    ActionType as CoreActionType, ControllerKind, DeckWeaverCore as CoreEngine,
+    Device as CoreDevice, DeviceType as CoreDeviceType, HardwareDevice as CoreHardwareDevice,
+    VERSION,
 };
 use pyo3::basic::CompareOp;
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
@@ -83,54 +83,12 @@ impl From<CoreActionType> for ActionType {
     }
 }
 
+/// A render/behaviour config for one action. Wraps the core config directly, so a field added to
+/// the core needs no copying here; Python only gets setters for the fields main.py fills in.
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct ActionConfig {
-    #[pyo3(get, set)]
-    pub action_id: String,
-    #[pyo3(get, set)]
-    pub action_type: ActionType,
-    #[pyo3(get, set)]
-    pub device_id: Option<String>,
-    #[pyo3(get, set)]
-    pub device_type: Option<DeviceType>,
-    #[pyo3(get, set)]
-    pub volume_step: i8,
-    #[pyo3(get, set)]
-    pub width: u32,
-    #[pyo3(get, set)]
-    pub height: u32,
-    #[pyo3(get, set)]
-    pub meters_enabled: bool,
-    #[pyo3(get, set)]
-    pub meter_invert: bool,
-    #[pyo3(get, set)]
-    pub volume_bar_color: Option<(u8, u8, u8, u8)>,
-    #[pyo3(get, set)]
-    pub meter_color: Option<(u8, u8, u8, u8)>,
-    #[pyo3(get, set)]
-    pub orientation: String,
-    #[pyo3(get, set)]
-    pub is_top: bool,
-    #[pyo3(get, set)]
-    pub icon_png: Option<Vec<u8>>,
-    #[pyo3(get, set)]
-    pub icon_path: Option<String>,
-    #[pyo3(get, set)]
-    pub button_overlay: bool,
-    #[pyo3(get, set)]
-    pub source_mix_b: bool,
-    #[pyo3(get, set)]
-    pub mute_profile_index: u8,
-    #[pyo3(get, set)]
-    pub mute_profile_muted: bool,
-    #[pyo3(get, set)]
-    pub mute_profile_data: Vec<bool>,
-    #[pyo3(get, set)]
-    pub show_volume: bool,
-    /// Route toggle only: the target whose route from `device_id` the key flips.
-    #[pyo3(get, set)]
-    pub route_target_id: Option<String>,
+    inner: CoreActionConfig,
 }
 
 #[pymethods]
@@ -138,8 +96,9 @@ impl ActionConfig {
     #[new]
     #[pyo3(signature = (action_id, action_type, width=200, height=100))]
     fn new(action_id: String, action_type: ActionType, width: u32, height: u32) -> Self {
-        let core = CoreActionConfig::new(action_id, action_type.into(), width, height);
-        Self::from_core(core)
+        Self {
+            inner: CoreActionConfig::new(action_id, action_type.into(), width, height),
+        }
     }
 
     fn apply_knob_settings(
@@ -149,72 +108,73 @@ impl ActionConfig {
         mute_profile_data: Vec<bool>,
         show_volume: bool,
     ) {
-        let mut core = self.to_core();
-        core.apply_knob_settings(
+        self.inner.apply_knob_settings(
             source_mix_b,
             mute_profile_index,
             mute_profile_data,
             show_volume,
         );
-        *self = Self::from_core(core);
-    }
-}
-
-impl ActionConfig {
-    fn from_core(core: CoreActionConfig) -> Self {
-        Self {
-            action_id: core.action_id,
-            action_type: core.action_type.into(),
-            device_id: core.device_id,
-            device_type: core.device_type.map(DeviceType::from_core),
-            volume_step: core.volume_step,
-            width: core.width,
-            height: core.height,
-            meters_enabled: core.meters_enabled,
-            meter_invert: core.meter_invert,
-            volume_bar_color: core.volume_bar_color,
-            meter_color: core.meter_color,
-            orientation: core.orientation,
-            is_top: core.is_top,
-            icon_png: core.icon_png,
-            icon_path: core.icon_path,
-            button_overlay: core.button_overlay,
-            source_mix_b: core.source_mix_b,
-            mute_profile_index: core.mute_profile_index,
-            mute_profile_muted: core.mute_profile_muted,
-            mute_profile_data: core.mute_profile_data,
-            show_volume: core.show_volume,
-            route_target_id: core.route_target_id,
-        }
     }
 
-    fn to_core(&self) -> CoreActionConfig {
-        CoreActionConfig {
-            action_id: self.action_id.clone(),
-            action_type: self.action_type.into(),
-            device_id: self.device_id.clone(),
-            device_type: self.device_type.map(|dt| dt.into_core()),
-            volume_step: self.volume_step,
-            width: self.width,
-            height: self.height,
-            meters_enabled: self.meters_enabled,
-            meter_invert: self.meter_invert,
-            volume_bar_color: self.volume_bar_color,
-            meter_color: self.meter_color,
-            orientation: self.orientation.clone(),
-            is_top: self.is_top,
-            icon_png: self.icon_png.clone(),
-            icon_path: self.icon_path.clone(),
-            button_overlay: self.button_overlay,
-            source_mix_b: self.source_mix_b,
-            mute_profile_index: self.mute_profile_index,
-            mute_profile_muted: self.mute_profile_muted,
-            mute_profile_data: self.mute_profile_data.clone(),
-            show_volume: self.show_volume,
-            routed_to: None,
-            app_icon_path: None,
-            route_target_id: self.route_target_id.clone(),
-        }
+    #[setter]
+    fn set_device_id(&mut self, value: Option<String>) {
+        self.inner.device_id = value;
+    }
+
+    #[setter]
+    fn set_device_type(&mut self, value: Option<DeviceType>) {
+        self.inner.device_type = value.map(DeviceType::into_core);
+    }
+
+    #[setter]
+    fn set_volume_step(&mut self, value: i8) {
+        self.inner.volume_step = value;
+    }
+
+    #[setter]
+    fn set_meters_enabled(&mut self, value: bool) {
+        self.inner.meters_enabled = value;
+    }
+
+    #[setter]
+    fn set_meter_invert(&mut self, value: bool) {
+        self.inner.meter_invert = value;
+    }
+
+    #[setter]
+    fn set_volume_bar_color(&mut self, value: Option<(u8, u8, u8, u8)>) {
+        self.inner.volume_bar_color = value;
+    }
+
+    #[setter]
+    fn set_meter_color(&mut self, value: Option<(u8, u8, u8, u8)>) {
+        self.inner.meter_color = value;
+    }
+
+    #[setter]
+    fn set_orientation(&mut self, value: String) {
+        self.inner.orientation = value;
+    }
+
+    #[setter]
+    fn set_is_top(&mut self, value: bool) {
+        self.inner.is_top = value;
+    }
+
+    #[setter]
+    fn set_icon_path(&mut self, value: Option<String>) {
+        self.inner.icon_path = value;
+    }
+
+    #[setter]
+    fn set_button_overlay(&mut self, value: bool) {
+        self.inner.button_overlay = value;
+    }
+
+    /// Route toggle only: the target whose route from `device_id` the key flips.
+    #[setter]
+    fn set_route_target_id(&mut self, value: Option<String>) {
+        self.inner.route_target_id = value;
     }
 }
 
@@ -293,18 +253,6 @@ pub struct DeviceColor {
     pub green: u8,
     #[pyo3(get)]
     pub blue: u8,
-}
-
-#[pymethods]
-impl DeviceColor {
-    #[new]
-    fn new(red: u8, green: u8, blue: u8) -> Self {
-        Self { red, green, blue }
-    }
-
-    fn rgba(&self) -> (u8, u8, u8, u8) {
-        (self.red, self.green, self.blue, 255)
-    }
 }
 
 /// An application currently playing audio, aggregated across all of its streams.
@@ -404,10 +352,7 @@ impl Device {
         Self {
             id: device.id,
             name: device.name,
-            device_type: match device.device_type {
-                CoreDeviceType::Source => DeviceType::Source,
-                CoreDeviceType::Target => DeviceType::Target,
-            },
+            device_type: DeviceType::from_core(device.device_type),
             is_physical: device.is_physical,
             volume: device.volume,
             is_muted: device.is_muted,
@@ -454,6 +399,15 @@ impl HardwareDevice {
     }
 }
 
+fn devices(list: Vec<CoreDevice>) -> Vec<Device> {
+    list.into_iter().map(Device::from_core).collect()
+}
+
+fn hardware_devices(list: Vec<CoreHardwareDevice>) -> Vec<HardwareDevice> {
+    list.into_iter().map(HardwareDevice::from_core).collect()
+}
+
+/// The engine, exposing only what main.py calls.
 #[pyclass]
 pub struct DeckWeaverCore {
     inner: CoreEngine,
@@ -477,7 +431,7 @@ impl DeckWeaverCore {
     }
 
     fn register_action(&self, config: ActionConfig) {
-        self.inner.register_action(config.to_core());
+        self.inner.register_action(config.inner);
     }
 
     fn unregister_action(&self, action_id: &str) {
@@ -485,7 +439,7 @@ impl DeckWeaverCore {
     }
 
     fn update_action(&self, action_id: &str, config: ActionConfig) {
-        self.inner.update_action(action_id, config.to_core());
+        self.inner.update_action(action_id, config.inner);
     }
 
     fn get_pending_updates<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyDict>> {
@@ -504,11 +458,7 @@ impl DeckWeaverCore {
             } else {
                 entry.set_item("image", py.None())?;
             }
-            if let Some(label) = update.label {
-                entry.set_item("label", label)?;
-            } else {
-                entry.set_item("label", py.None())?;
-            }
+            entry.set_item("label", update.label)?;
             dict.set_item(action_id, entry)?;
         }
         Ok(dict)
@@ -519,100 +469,44 @@ impl DeckWeaverCore {
     }
 
     fn get_devices(&self) -> Vec<Device> {
-        self.inner
-            .get_devices()
-            .into_iter()
-            .map(Device::from_core)
-            .collect()
+        devices(self.inner.get_devices())
     }
 
-    #[pyo3(name = "get_sources")]
-    fn py_get_sources(&self) -> Vec<Device> {
-        self.inner
-            .get_sources()
-            .into_iter()
-            .map(Device::from_core)
-            .collect()
+    fn get_sources(&self) -> Vec<Device> {
+        devices(self.inner.get_sources())
     }
 
-    #[pyo3(name = "get_targets")]
-    fn py_get_targets(&self) -> Vec<Device> {
-        self.inner
-            .get_targets()
-            .into_iter()
-            .map(Device::from_core)
-            .collect()
+    fn get_targets(&self) -> Vec<Device> {
+        devices(self.inner.get_targets())
     }
 
-    #[pyo3(name = "get_physical_sources")]
-    fn py_get_physical_sources(&self) -> Vec<Device> {
-        self.inner
-            .get_physical_sources()
-            .into_iter()
-            .map(Device::from_core)
-            .collect()
+    fn get_physical_sources(&self) -> Vec<Device> {
+        devices(self.inner.get_physical_sources())
     }
 
-    #[pyo3(name = "get_physical_targets")]
-    fn py_get_physical_targets(&self) -> Vec<Device> {
-        self.inner
-            .get_physical_targets()
-            .into_iter()
-            .map(Device::from_core)
-            .collect()
+    fn get_physical_targets(&self) -> Vec<Device> {
+        devices(self.inner.get_physical_targets())
     }
 
     #[pyo3(signature = (device_id, device_type=None))]
     fn get_device(&self, device_id: &str, device_type: Option<DeviceType>) -> Option<Device> {
         self.inner
-            .get_device(device_id, device_type.map(|dt| dt.into_core()))
+            .get_device(device_id, device_type.map(DeviceType::into_core))
             .map(Device::from_core)
     }
 
-    #[pyo3(name = "get_target_sources")]
-    fn py_get_target_sources(&self, target_id: &str) -> Vec<Device> {
-        self.inner
-            .get_target_sources(target_id)
-            .into_iter()
-            .map(Device::from_core)
-            .collect()
+    fn get_output_hardware_devices(&self) -> Vec<HardwareDevice> {
+        hardware_devices(self.inner.get_output_hardware_devices())
     }
 
-    #[pyo3(name = "get_output_hardware_devices")]
-    fn py_get_output_hardware_devices(&self) -> Vec<HardwareDevice> {
-        self.inner
-            .get_output_hardware_devices()
-            .into_iter()
-            .map(HardwareDevice::from_core)
-            .collect()
-    }
-
-    #[pyo3(name = "get_input_hardware_devices")]
-    fn py_get_input_hardware_devices(&self) -> Vec<HardwareDevice> {
-        self.inner
-            .get_input_hardware_devices()
-            .into_iter()
-            .map(HardwareDevice::from_core)
-            .collect()
-    }
-
-    fn get_hardware_device_name(&self, node_id: u32, is_input: bool) -> Option<String> {
-        self.inner.get_hardware_device_name(node_id, is_input)
+    fn get_input_hardware_devices(&self) -> Vec<HardwareDevice> {
+        hardware_devices(self.inner.get_input_hardware_devices())
     }
 
     fn infer_device_type(&self, device_id: &str, prefer_target: bool) -> Option<DeviceType> {
         self.inner
             .infer_device_type(device_id, prefer_target)
             .map(DeviceType::from_core)
-    }
-
-    #[pyo3(signature = (device_id, volume, device_type=None))]
-    fn set_volume(&self, device_id: &str, volume: u8, device_type: Option<DeviceType>) -> bool {
-        self.inner.set_volume(
-            device_id,
-            volume,
-            device_type.map(|dt| dt.into_core()),
-        )
     }
 
     #[pyo3(signature = (device_id, delta, device_type=None))]
@@ -622,17 +516,14 @@ impl DeckWeaverCore {
         delta: i8,
         device_type: Option<DeviceType>,
     ) -> bool {
-        self.inner.set_volume_relative(
-            device_id,
-            delta,
-            device_type.map(|dt| dt.into_core()),
-        )
+        self.inner
+            .set_volume_relative(device_id, delta, device_type.map(DeviceType::into_core))
     }
 
     #[pyo3(signature = (device_id, device_type=None))]
     fn toggle_mute(&self, device_id: &str, device_type: Option<DeviceType>) -> bool {
         self.inner
-            .toggle_mute(device_id, device_type.map(|dt| dt.into_core()))
+            .toggle_mute(device_id, device_type.map(DeviceType::into_core))
     }
 
     /// True once the sound server is reachable. Independent of `is_available`, which reports the
@@ -656,22 +547,8 @@ impl DeckWeaverCore {
         self.inner.set_app_volume_relative(device_id, delta)
     }
 
-    fn set_app_volume(&self, device_id: &str, volume: u8) -> bool {
-        self.inner.set_app_volume(device_id, volume)
-    }
-
-    fn set_app_mute(&self, device_id: &str, muted: bool) -> bool {
-        self.inner.set_app_mute(device_id, muted)
-    }
-
     fn toggle_app_mute(&self, device_id: &str) -> bool {
         self.inner.toggle_app_mute(device_id)
-    }
-
-    /// Whether a device id refers to an app stream rather than a PipeWeaver device.
-    #[staticmethod]
-    fn is_app_device(device_id: &str) -> bool {
-        CoreEngine::is_app_device(device_id)
     }
 
     /// True once focus tracking is live. False where no supported compositor was found, which is
@@ -691,20 +568,8 @@ impl DeckWeaverCore {
             .set_source_volume_relative(device_id, mix_b, delta)
     }
 
-    fn set_source_mute(&self, device_id: &str, mix_b: bool, muted: bool) -> bool {
-        self.inner.set_source_mute(device_id, mix_b, muted)
-    }
-
-    fn set_target_mute(&self, device_id: &str, muted: bool) -> bool {
-        self.inner.set_target_mute(device_id, muted)
-    }
-
     fn set_target_mix(&self, device_id: &str, mix_b: bool) -> bool {
         self.inner.set_target_mix(device_id, mix_b)
-    }
-
-    fn toggle_target_mute(&self, device_id: &str) -> bool {
-        self.inner.toggle_target_mute(device_id)
     }
 
     fn toggle_target_mix(&self, device_id: &str) -> bool {
@@ -715,20 +580,8 @@ impl DeckWeaverCore {
         self.inner.toggle_source_volumes_linked(device_id)
     }
 
-    fn apply_mute_profile(&self, config: &ActionConfig) -> bool {
-        self.inner.apply_mute_profile(&config.to_core())
-    }
-
     fn toggle_mute_profile(&self, config: &ActionConfig) -> Option<bool> {
-        self.inner.toggle_mute_profile(&config.to_core())
-    }
-
-    fn is_routed(&self, source_id: &str, target_id: &str) -> Option<bool> {
-        self.inner.is_routed(source_id, target_id)
-    }
-
-    fn set_route(&self, source_id: &str, target_id: &str, enabled: bool) -> bool {
-        self.inner.set_route(source_id, target_id, enabled)
+        self.inner.toggle_mute_profile(&config.inner)
     }
 
     fn toggle_route(&self, source_id: &str, target_id: &str) -> bool {
@@ -748,54 +601,6 @@ impl DeckWeaverCore {
     }
 }
 
-#[pyclass]
-pub struct KnobRenderer {
-    inner: CoreKnobRenderer,
-}
-
-#[pymethods]
-impl KnobRenderer {
-    #[new]
-    #[pyo3(signature = (width=200, height=100))]
-    fn new(width: u32, height: u32) -> Self {
-        Self {
-            inner: CoreKnobRenderer::new(width, height),
-        }
-    }
-}
-
-#[pyclass]
-pub struct SliderRenderer {
-    inner: CoreSliderRenderer,
-}
-
-#[pymethods]
-impl SliderRenderer {
-    #[new]
-    #[pyo3(signature = (button_size=72))]
-    fn new(button_size: u32) -> Self {
-        Self {
-            inner: CoreSliderRenderer::new(button_size),
-        }
-    }
-}
-
-#[pyclass]
-pub struct ButtonRenderer {
-    inner: CoreButtonRenderer,
-}
-
-#[pymethods]
-impl ButtonRenderer {
-    #[new]
-    #[pyo3(signature = (button_size=72))]
-    fn new(button_size: u32) -> Self {
-        Self {
-            inner: CoreButtonRenderer::new(button_size),
-        }
-    }
-}
-
 #[pyfunction]
 #[pyo3(signature = (action_type, is_encoder=false))]
 pub fn action_dimensions(action_type: ActionType, is_encoder: bool) -> (u32, u32) {
@@ -807,11 +612,6 @@ pub fn action_dimensions(action_type: ActionType, is_encoder: bool) -> (u32, u32
     core_action_dimensions(action_type.into(), controller)
 }
 
-#[pyfunction]
-pub fn load_icon_to_png(path: &str) -> PyResult<Option<Vec<u8>>> {
-    Ok(load_icon_to_png_bytes(path))
-}
-
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DeckWeaverCore>()?;
     m.add_class::<ActionConfig>()?;
@@ -821,13 +621,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DeviceColor>()?;
     m.add_class::<DeviceType>()?;
     m.add_class::<HardwareDevice>()?;
-    m.add_class::<KnobRenderer>()?;
-    m.add_class::<SliderRenderer>()?;
-    m.add_class::<ButtonRenderer>()?;
     m.add_function(wrap_pyfunction!(action_dimensions, m)?)?;
-    m.add_function(wrap_pyfunction!(load_icon_to_png, m)?)?;
     m.add("VERSION", VERSION)?;
-    m.add("DEFAULT_PORT", DEFAULT_PORT)?;
     m.add("FOCUSED_DEVICE_ID", deckweaver_core::FOCUSED_DEVICE_ID)?;
     Ok(())
 }
