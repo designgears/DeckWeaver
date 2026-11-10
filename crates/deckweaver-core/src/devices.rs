@@ -34,23 +34,23 @@ impl DeviceType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
-        pub id: String,
-        pub name: String,
-        pub device_type: DeviceType,
-        pub is_physical: bool,
-        pub volume: u8,
-        pub is_muted: bool,
-        pub color: Option<DeviceColor>,
-        pub source_mix_a_volume: Option<u8>,
-        pub source_mix_b_volume: Option<u8>,
-        pub source_mix_a_muted: Option<bool>,
-        pub source_mix_b_muted: Option<bool>,
-        pub source_mute_a_all: Option<bool>,
-        pub source_mute_b_all: Option<bool>,
-        pub source_mute_a_target_count: Option<u8>,
-        pub source_mute_b_target_count: Option<u8>,
-        pub source_volumes_linked: Option<bool>,
-        pub target_mix_b: Option<bool>,
+    pub id: String,
+    pub name: String,
+    pub device_type: DeviceType,
+    pub is_physical: bool,
+    pub volume: u8,
+    pub is_muted: bool,
+    pub color: Option<DeviceColor>,
+    pub source_mix_a_volume: Option<u8>,
+    pub source_mix_b_volume: Option<u8>,
+    pub source_mix_a_muted: Option<bool>,
+    pub source_mix_b_muted: Option<bool>,
+    pub source_mute_a_all: Option<bool>,
+    pub source_mute_b_all: Option<bool>,
+    pub source_mute_a_target_count: Option<u8>,
+    pub source_mute_b_target_count: Option<u8>,
+    pub source_volumes_linked: Option<bool>,
+    pub target_mix_b: Option<bool>,
 }
 
 impl Device {
@@ -100,13 +100,12 @@ impl DeviceColor {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HardwareDevice {
-        pub node_id: Option<u32>,
-        pub name: Option<String>,
-        pub description: Option<String>,
-        pub attachment_index: Option<usize>,
+    pub node_id: Option<u32>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub attachment_index: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,8 +115,6 @@ pub struct Status {
     #[serde(skip)]
     device_index: RwLock<Option<HashMap<String, Vec<Device>>>>,
 }
-
-// Use pipeweaver types directly - Devices is the devices tree
 
 impl Default for Status {
     fn default() -> Self {
@@ -154,12 +151,11 @@ impl Status {
         let mut sources = Vec::new();
 
         for (source_id, targets) in &self.audio.profile.routes {
-            if targets.iter().any(|target| target.to_string() == target_id) {
-                if let Some(device) =
+            if targets.iter().any(|target| target.to_string() == target_id)
+                && let Some(device) =
                     self.get_device(&source_id.to_string(), Some(DeviceType::Source))
-                {
-                    sources.push(device);
-                }
+            {
+                sources.push(device);
             }
         }
 
@@ -201,88 +197,50 @@ impl Status {
     }
 
     pub fn get_attached_output_hardware_devices(&self, target_id: &str) -> Vec<HardwareDevice> {
-        self.get_attached_physical_hardware_devices_by_id(
-            target_id,
-            &self.devices_tree().targets.physical_devices,
-            &self.audio.devices[PipeweaverDeviceType::Target],
-        )
+        let attached = self
+            .devices_tree()
+            .targets
+            .physical_devices
+            .iter()
+            .find(|d| d.description.id.to_string() == target_id)
+            .map(|d| d.attached_devices.as_slice());
+        Self::resolve_attached(attached, &self.audio.devices[PipeweaverDeviceType::Target])
     }
 
     pub fn get_attached_input_hardware_devices(&self, source_id: &str) -> Vec<HardwareDevice> {
-        self.get_attached_source_hardware_devices(
-            source_id,
-        )
-    }
-
-    fn get_attached_source_hardware_devices(
-        &self,
-        source_id: &str,
-    ) -> Vec<HardwareDevice> {
-        let Some(device) = self
+        let attached = self
             .devices_tree()
             .sources
             .physical_devices
             .iter()
             .find(|d| d.description.id.to_string() == source_id)
-        else {
-            return Vec::new();
-        };
-
-        let available = &self.audio.devices[PipeweaverDeviceType::Source];
-        device
-            .attached_devices
-            .iter()
-            .enumerate()
-            .map(|(index, descriptor)| {
-                if let Some(hw) =
-                    Self::match_descriptor_to_hardware_device(descriptor, available)
-                {
-                    let mut converted = Self::convert_hardware_device(hw);
-                    converted.attachment_index = Some(index);
-                    converted
-                } else {
-                    HardwareDevice {
-                        node_id: None,
-                        name: descriptor.name.clone(),
-                        description: descriptor.description.clone(),
-                        attachment_index: Some(index),
-                    }
-                }
-            })
-            .collect()
+            .map(|d| d.attached_devices.as_slice());
+        Self::resolve_attached(attached, &self.audio.devices[PipeweaverDeviceType::Source])
     }
 
-    fn get_attached_physical_hardware_devices_by_id(
-        &self,
-        device_id: &str,
-        physical_devices: &[pipeweaver_profile::PhysicalTargetDevice],
+    /// Match a physical device's attached descriptors against the hardware PipeWeaver currently
+    /// sees. A descriptor with no live match is still reported (without a node id) so it can be
+    /// detached.
+    fn resolve_attached(
+        attached: Option<&[PhysicalDeviceDescriptor]>,
         available: &[PipeweaverPhysicalDevice],
     ) -> Vec<HardwareDevice> {
-        let Some(device) = physical_devices
-            .iter()
-            .find(|d| d.description.id.to_string() == device_id)
-        else {
-            return Vec::new();
-        };
-
-        device
-            .attached_devices
+        attached
+            .unwrap_or_default()
             .iter()
             .enumerate()
             .map(|(index, descriptor)| {
-                if let Some(hw) =
-                    Self::match_descriptor_to_hardware_device(descriptor, available)
-                {
-                    let mut converted = Self::convert_hardware_device(hw);
-                    converted.attachment_index = Some(index);
-                    converted
-                } else {
-                    HardwareDevice {
+                match Self::match_descriptor_to_hardware_device(descriptor, available) {
+                    Some(hw) => HardwareDevice {
+                        attachment_index: Some(index),
+                        ..Self::convert_hardware_device(hw)
+                    },
+                    None => HardwareDevice {
                         node_id: None,
                         name: descriptor.name.clone(),
                         description: descriptor.description.clone(),
                         attachment_index: Some(index),
-                    }
+                    },
                 }
             })
             .collect()
@@ -300,39 +258,33 @@ impl Status {
     }
 
     pub fn get_sources(&self) -> Vec<Device> {
-        let tree = self.devices_tree();
-        let mut devices = Vec::new();
-
-        for raw in &tree.sources.virtual_devices {
-            if let Some(device) = Self::convert_virtual_source(raw) {
-                devices.push(device);
-            }
-        }
-        for raw in &tree.sources.physical_devices {
-            if let Some(device) = Self::convert_physical_source(raw) {
-                devices.push(device);
-            }
-        }
-
-        devices
+        let sources = &self.devices_tree().sources;
+        sources
+            .virtual_devices
+            .iter()
+            .map(Self::convert_virtual_source)
+            .chain(
+                sources
+                    .physical_devices
+                    .iter()
+                    .map(Self::convert_physical_source),
+            )
+            .collect()
     }
 
     pub fn get_targets(&self) -> Vec<Device> {
-        let tree = self.devices_tree();
-        let mut devices = Vec::new();
-
-        for raw in &tree.targets.virtual_devices {
-            if let Some(device) = Self::convert_virtual_target(raw) {
-                devices.push(device);
-            }
-        }
-        for raw in &tree.targets.physical_devices {
-            if let Some(device) = Self::convert_physical_target(raw) {
-                devices.push(device);
-            }
-        }
-
-        devices
+        let targets = &self.devices_tree().targets;
+        targets
+            .virtual_devices
+            .iter()
+            .map(Self::convert_virtual_target)
+            .chain(
+                targets
+                    .physical_devices
+                    .iter()
+                    .map(Self::convert_physical_target),
+            )
+            .collect()
     }
 
     pub fn get_physical_sources(&self) -> Vec<Device> {
@@ -340,7 +292,7 @@ impl Status {
             .sources
             .physical_devices
             .iter()
-            .filter_map(|raw| Self::convert_physical_source(raw))
+            .map(Self::convert_physical_source)
             .collect()
     }
 
@@ -349,7 +301,7 @@ impl Status {
             .targets
             .physical_devices
             .iter()
-            .filter_map(|raw| Self::convert_physical_target(raw))
+            .map(Self::convert_physical_target)
             .collect()
     }
 
@@ -400,15 +352,15 @@ impl Status {
         }
     }
 
-    fn convert_virtual_source(raw: &VirtualSourceDevice) -> Option<Device> {
+    fn convert_virtual_source(raw: &VirtualSourceDevice) -> Device {
         Self::convert_source_common(&raw.description, &raw.volumes, &raw.mute_states, false)
     }
 
-    fn convert_physical_source(raw: &PhysicalSourceDevice) -> Option<Device> {
+    fn convert_physical_source(raw: &PhysicalSourceDevice) -> Device {
         Self::convert_source_common(&raw.description, &raw.volumes, &raw.mute_states, true)
     }
 
-    fn convert_virtual_target(raw: &VirtualTargetDevice) -> Option<Device> {
+    fn convert_virtual_target(raw: &VirtualTargetDevice) -> Device {
         Self::convert_target_common(
             &raw.description,
             &raw.volume,
@@ -418,7 +370,7 @@ impl Status {
         )
     }
 
-    fn convert_physical_target(raw: &PhysicalTargetDevice) -> Option<Device> {
+    fn convert_physical_target(raw: &PhysicalTargetDevice) -> Device {
         Self::convert_target_common(
             &raw.description,
             &raw.volume,
@@ -433,10 +385,7 @@ impl Status {
         volumes: &pipeweaver_profile::Volumes,
         mute_states: &pipeweaver_profile::MuteStates,
         is_physical: bool,
-    ) -> Option<Device> {
-        let id = description.id.to_string();
-        let name = description.name.clone();
-
+    ) -> Device {
         let mix_a_volume = Self::normalize_volume(volumes.volume[Mix::A]);
         let mix_b_volume = Self::normalize_volume(volumes.volume[Mix::B]);
         let mix_a_muted = mute_states.mute_state.contains(&MuteTarget::TargetA);
@@ -450,20 +399,14 @@ impl Status {
         let mix_a_all = mix_a_target_count == 0;
         let mix_b_all = mix_b_target_count == 0;
 
-        let color = Some(DeviceColor {
-            red: description.colour.red,
-            green: description.colour.green,
-            blue: description.colour.blue,
-        });
-
-        Some(Device {
-            id: id.clone(),
-            name: name.clone(),
+        Device {
+            id: description.id.to_string(),
+            name: description.name.clone(),
             device_type: DeviceType::Source,
             is_physical,
             volume: mix_a_volume,
             is_muted: mix_a_muted,
-            color,
+            color: Some(Self::device_color(description)),
             source_mix_a_volume: Some(mix_a_volume),
             source_mix_b_volume: Some(mix_b_volume),
             source_mix_a_muted: Some(mix_a_muted),
@@ -474,7 +417,7 @@ impl Status {
             source_mute_b_target_count: Some(mix_b_target_count),
             source_volumes_linked: Some(volumes.volumes_linked.is_some()),
             target_mix_b: None,
-        })
+        }
     }
 
     fn convert_target_common(
@@ -483,27 +426,19 @@ impl Status {
         mute_state: &pipeweaver_shared::MuteState,
         mix: Mix,
         is_physical: bool,
-    ) -> Option<Device> {
-        let id = description.id.to_string();
-        let name = description.name.clone();
+    ) -> Device {
         let volume = Self::normalize_volume(*volume);
 
         let is_muted = matches!(mute_state, pipeweaver_shared::MuteState::Muted);
 
-        let color = Some(DeviceColor {
-            red: description.colour.red,
-            green: description.colour.green,
-            blue: description.colour.blue,
-        });
-
-        Some(Device {
-            id: id.clone(),
-            name: name.clone(),
+        Device {
+            id: description.id.to_string(),
+            name: description.name.clone(),
             device_type: DeviceType::Target,
             is_physical,
             volume,
             is_muted,
-            color,
+            color: Some(Self::device_color(description)),
             source_mix_a_volume: None,
             source_mix_b_volume: None,
             source_mix_a_muted: None,
@@ -514,7 +449,12 @@ impl Status {
             source_mute_b_target_count: None,
             source_volumes_linked: None,
             target_mix_b: Some(matches!(mix, Mix::B)),
-        })
+        }
+    }
+
+    fn device_color(description: &pipeweaver_profile::DeviceDescription) -> DeviceColor {
+        let colour = &description.colour;
+        DeviceColor::new(colour.red, colour.green, colour.blue)
     }
 
     fn convert_hardware_device(device: &PipeweaverPhysicalDevice) -> HardwareDevice {
@@ -530,13 +470,12 @@ impl Status {
         descriptor: &PhysicalDeviceDescriptor,
         devices: &'a [PipeweaverPhysicalDevice],
     ) -> Option<&'a PipeweaverPhysicalDevice> {
-        if let Some(name) = descriptor.name.as_ref() {
-            if let Some(device) = devices
+        if let Some(name) = descriptor.name.as_ref()
+            && let Some(device) = devices
                 .iter()
                 .find(|device| device.name.as_ref() == Some(name))
-            {
-                return Some(device);
-            }
+        {
+            return Some(device);
         }
 
         if let Some(description) = descriptor.description.as_ref() {

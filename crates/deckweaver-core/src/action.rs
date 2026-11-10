@@ -1,5 +1,4 @@
-use crate::devices::Device;
-use crate::devices::DeviceType;
+use crate::devices::{Device, DeviceType};
 use parking_lot::RwLock;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -15,24 +14,24 @@ pub enum ActionType {
 #[derive(Debug, Clone)]
 pub struct ActionConfig {
     pub action_id: String,
-        pub action_type: ActionType,
-        pub device_id: Option<String>,
-        pub device_type: Option<DeviceType>,
-        pub volume_step: i8,
-        pub width: u32,
-        pub height: u32,
-        pub meters_enabled: bool,
-        pub meter_invert: bool,
-        pub volume_bar_color: Option<(u8, u8, u8, u8)>,
-        pub meter_color: Option<(u8, u8, u8, u8)>,
-        pub orientation: String,
-        pub is_top: bool,
-        pub icon_png: Option<Vec<u8>>,
-        pub icon_path: Option<String>,
-        pub button_overlay: bool,
-        pub source_mix_b: bool,
-        pub mute_profile_index: u8,
-        pub mute_profile_muted: bool,
+    pub action_type: ActionType,
+    pub device_id: Option<String>,
+    pub device_type: Option<DeviceType>,
+    pub volume_step: i8,
+    pub width: u32,
+    pub height: u32,
+    pub meters_enabled: bool,
+    pub meter_invert: bool,
+    pub volume_bar_color: Option<(u8, u8, u8, u8)>,
+    pub meter_color: Option<(u8, u8, u8, u8)>,
+    pub orientation: String,
+    pub is_top: bool,
+    pub icon_png: Option<Vec<u8>>,
+    pub icon_path: Option<String>,
+    pub button_overlay: bool,
+    pub source_mix_b: bool,
+    pub mute_profile_index: u8,
+    pub mute_profile_muted: bool,
     pub mute_profile_data: Vec<bool>,
     /// Knob only: draw the volume percentage in the top right of the encoder strip.
     pub show_volume: bool,
@@ -77,6 +76,27 @@ impl ActionConfig {
     }
 }
 
+impl ActionConfig {
+    /// The knob-only settings that change what the strip shows.
+    fn hash_knob_settings(&self, hasher: &mut DefaultHasher) {
+        self.source_mix_b.hash(hasher);
+        self.mute_profile_index.hash(hasher);
+        self.mute_profile_data.hash(hasher);
+        self.show_volume.hash(hasher);
+    }
+}
+
+/// The live device fields every renderer draws from, shared by the frame and base hashes.
+fn hash_device_state(device: &Device, hasher: &mut DefaultHasher) {
+    device.name.hash(hasher);
+    device.volume.hash(hasher);
+    device.is_muted.hash(hasher);
+    device.source_mix_a_muted.hash(hasher);
+    device.source_mix_b_muted.hash(hasher);
+    device.source_volumes_linked.hash(hasher);
+    device.target_mix_b.hash(hasher);
+}
+
 #[derive(Debug, Clone)]
 pub struct CachedIcon {
     pub rgba8: image::RgbaImage,
@@ -99,7 +119,7 @@ pub struct ActionState {
     pub device: Option<Device>,
     pub meter_value: AtomicU8,
     pub last_render_hash: AtomicU64,
-    pub last_label: parking_lot::RwLock<Option<String>>,
+    pub last_label: RwLock<Option<String>>,
     pub cached_icon: RwLock<Option<(u64, CachedIcon)>>,
     pub cached_base: RwLock<Option<CachedBaseRender>>,
 }
@@ -112,7 +132,7 @@ impl ActionState {
             meter_value: AtomicU8::new(0),
             // Force first frame to render even when device/meter state hashes to 0.
             last_render_hash: AtomicU64::new(u64::MAX),
-            last_label: parking_lot::RwLock::new(None),
+            last_label: RwLock::new(None),
             cached_icon: RwLock::new(None),
             cached_base: RwLock::new(None),
         }
@@ -123,13 +143,7 @@ impl ActionState {
         if let Some(ref device) = self.device {
             // The knob renderer draws the device name into the base image, so a rename has to
             // invalidate the cached base.
-            device.name.hash(&mut hasher);
-            device.volume.hash(&mut hasher);
-            device.is_muted.hash(&mut hasher);
-            device.source_mix_a_muted.hash(&mut hasher);
-            device.source_mix_b_muted.hash(&mut hasher);
-            device.source_volumes_linked.hash(&mut hasher);
-            device.target_mix_b.hash(&mut hasher);
+            hash_device_state(device, &mut hasher);
             if let Some(color) = &device.color {
                 color.red.hash(&mut hasher);
                 color.green.hash(&mut hasher);
@@ -147,18 +161,13 @@ impl ActionState {
         self.config.app_icon_path.hash(&mut hasher);
         self.config.routed_to.hash(&mut hasher);
         self.config.route_target_id.hash(&mut hasher);
-        if self.config.action_type == crate::action::ActionType::Slider {
-            self.config.orientation.hash(&mut hasher);
-            self.config.is_top.hash(&mut hasher);
-        }
-        if self.config.action_type == crate::action::ActionType::Button {
-            self.config.button_overlay.hash(&mut hasher);
-        }
-        if self.config.action_type == crate::action::ActionType::Knob {
-            self.config.source_mix_b.hash(&mut hasher);
-            self.config.mute_profile_index.hash(&mut hasher);
-            self.config.mute_profile_data.hash(&mut hasher);
-            self.config.show_volume.hash(&mut hasher);
+        match self.config.action_type {
+            ActionType::Slider => {
+                self.config.orientation.hash(&mut hasher);
+                self.config.is_top.hash(&mut hasher);
+            }
+            ActionType::Button => self.config.button_overlay.hash(&mut hasher),
+            ActionType::Knob => self.config.hash_knob_settings(&mut hasher),
         }
         hasher.finish()
     }
@@ -182,10 +191,10 @@ impl ActionState {
 
         {
             let cached = self.cached_icon.read();
-            if let Some((cached_hash, cached_icon)) = cached.as_ref() {
-                if *cached_hash == icon_hash {
-                    return Some(cached_icon.clone());
-                }
+            if let Some((cached_hash, cached_icon)) = cached.as_ref()
+                && *cached_hash == icon_hash
+            {
+                return Some(cached_icon.clone());
             }
         }
 
@@ -264,24 +273,14 @@ impl ActionState {
         self.config.orientation.hash(&mut hasher);
         self.config.is_top.hash(&mut hasher);
         self.config.button_overlay.hash(&mut hasher);
-        self.config.device_type.hash(&mut hasher);
-        if self.config.action_type == crate::action::ActionType::Knob {
-            self.config.source_mix_b.hash(&mut hasher);
-            self.config.mute_profile_index.hash(&mut hasher);
-            self.config.mute_profile_data.hash(&mut hasher);
-            self.config.show_volume.hash(&mut hasher);
+        if self.config.action_type == ActionType::Knob {
+            self.config.hash_knob_settings(&mut hasher);
         }
         self.get_meter().hash(&mut hasher);
 
         if let Some(ref device) = self.device {
             device.id.hash(&mut hasher);
-            device.name.hash(&mut hasher);
-            device.volume.hash(&mut hasher);
-            device.is_muted.hash(&mut hasher);
-            device.source_mix_a_muted.hash(&mut hasher);
-            device.source_mix_b_muted.hash(&mut hasher);
-            device.source_volumes_linked.hash(&mut hasher);
-            device.target_mix_b.hash(&mut hasher);
+            hash_device_state(device, &mut hasher);
         } else {
             0u8.hash(&mut hasher);
         }

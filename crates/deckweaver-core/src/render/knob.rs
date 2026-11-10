@@ -60,24 +60,12 @@ impl KnobRenderer {
     /// nothing happens to be playing is the normal resting state, not a fault, so it reads as a
     /// dimmed dial with the reason spelled out instead.
     pub fn render_idle_internal(&self, message: &str) -> Option<(Vec<u8>, u32, u32)> {
-        let mut pixmap = create_filled_pixmap(self.width, self.height, theme::IDLE_BG)?;
-
-        let width = self.width as f32 - theme::PAD * 2.0;
-        let label = truncate_to_width(message, width, theme::NAME_SIZE);
-        draw_text(
-            &mut pixmap,
-            &label,
-            Rect::new(
-                theme::PAD,
-                (self.height as f32 - theme::NAME_SIZE) * 0.5,
-                width,
-                theme::NAME_SIZE * 1.4,
-                0.0,
-            ),
-            &TextStyle::new(theme::NAME_SIZE, theme::TEXT_IDLE, TextAlign::Center),
-        );
-
-        pixmap_to_rgba(&pixmap)
+        pixmap_to_rgba(&create_idle_pixmap(
+            self.width,
+            self.height,
+            message,
+            theme::NAME_SIZE,
+        )?)
     }
 
     pub fn render_loading_internal(&self) -> Option<(Vec<u8>, u32, u32)> {
@@ -138,8 +126,14 @@ impl KnobRenderer {
         // stays untouched.
         let edge = theme::METER_EDGE_WIDTH;
         let ring_h = h + edge * 2.0;
-        Rect::new(x - edge, y - edge, fill_w + edge * 2.0, ring_h, ring_h * 0.5)
-            .draw_filled(pixmap, theme::METER_EDGE);
+        Rect::new(
+            x - edge,
+            y - edge,
+            fill_w + edge * 2.0,
+            ring_h,
+            ring_h * 0.5,
+        )
+        .draw_filled(pixmap, theme::METER_EDGE);
         Rect::new(x, y, fill_w, h, h * 0.5).draw_filled(pixmap, params.meter_fill_color());
     }
 
@@ -175,10 +169,10 @@ impl KnobRenderer {
     ) {
         if let Some(cached) = cached_icon {
             self.blit_icon(pixmap, &cached.rgba8, cached.width, cached.height);
-        } else if let Some(png) = icon_png {
-            if let Some((rgba, sw, sh)) = decode_icon(&png, theme::ICON_SIZE) {
-                self.blit_icon(pixmap, &rgba, sw, sh);
-            }
+        } else if let Some(png) = icon_png
+            && let Some((rgba, sw, sh)) = decode_icon(&png, theme::ICON_SIZE)
+        {
+            self.blit_icon(pixmap, &rgba, sw, sh);
         }
     }
 

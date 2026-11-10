@@ -734,10 +734,13 @@ pub fn dominant_accent(image: &image::RgbaImage) -> Option<(u8, u8, u8)> {
     None
 }
 
+/// One colour bucket in [`accent_pass`]: total weight, then the weighted red, green and blue sums.
+type Bucket = (f32, f64, f64, f64);
+
 fn accent_pass(image: &image::RgbaImage, min_saturation: f32) -> Option<(u8, u8, u8)> {
     // 4 bits per channel: coarse enough that shading variations of one colour land together,
     // fine enough to keep genuinely different colours apart.
-    let mut buckets: HashMap<(u8, u8, u8), (f32, f64, f64, f64)> = HashMap::new();
+    let mut buckets: HashMap<(u8, u8, u8), Bucket> = HashMap::new();
 
     for pixel in image.pixels() {
         let [r, g, b, a] = pixel.0;
