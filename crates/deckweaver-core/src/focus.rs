@@ -361,193 +361,6 @@ fn parent_pid(pid: u32) -> Option<u32> {
         .and_then(|value| value.trim().parse().ok())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
-        let map: HashMap<String, String> = pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        move |key: &str| map.get(key).cloned()
-    }
-
-    #[test]
-    fn wayland_compositors_are_detected_by_their_socket() {
-        assert_eq!(
-            detect_backend_from(env(&[("HYPRLAND_INSTANCE_SIGNATURE", "abc")])),
-            Some(Backend::Hyprland)
-        );
-        assert_eq!(
-            detect_backend_from(env(&[("NIRI_SOCKET", "/run/niri.sock")])),
-            Some(Backend::Niri)
-        );
-        assert_eq!(
-            detect_backend_from(env(&[("SWAYSOCK", "/run/sway.sock")])),
-            Some(Backend::Sway)
-        );
-        assert_eq!(
-            detect_backend_from(env(&[("XDG_CURRENT_DESKTOP", "KDE")])),
-            Some(Backend::KWin)
-        );
-    }
-
-    /// XWayland sets DISPLAY inside a Wayland session, where the X11 root window can only ever see
-    /// X11 clients. Picking X11 there would report stale focus forever.
-    #[test]
-    fn x11_is_only_chosen_for_a_real_x11_session() {
-        assert_eq!(
-            detect_backend_from(env(&[("DISPLAY", ":0"), ("XDG_SESSION_TYPE", "wayland")])),
-            None
-        );
-        assert_eq!(
-            detect_backend_from(env(&[("DISPLAY", ":0"), ("XDG_SESSION_TYPE", "x11")])),
-            Some(Backend::X11)
-        );
-    }
-
-    /// A compositor socket must win over the DISPLAY that XWayland also exports.
-    #[test]
-    fn compositor_socket_beats_display() {
-        assert_eq!(
-            detect_backend_from(env(&[
-                ("SWAYSOCK", "/run/sway.sock"),
-                ("DISPLAY", ":0"),
-                ("XDG_SESSION_TYPE", "x11"),
-            ])),
-            Some(Backend::Sway)
-        );
-    }
-
-    #[test]
-    fn empty_variables_do_not_count_as_present() {
-        assert_eq!(detect_backend_from(env(&[("SWAYSOCK", "")])), None);
-    }
-
-    #[test]
-    fn gnome_wayland_has_no_backend() {
-        assert_eq!(
-            detect_backend_from(env(&[
-                ("XDG_CURRENT_DESKTOP", "GNOME"),
-                ("XDG_SESSION_TYPE", "wayland"),
-            ])),
-            None
-        );
-    }
-
-    #[test]
-    fn hyprland_output_parses() {
-        let window = parse_hyprland(
-            r#"{"address":"0x1","pid":4242,"class":"firefox","title":"Some Page"}"#,
-        )
-        .expect("focused window");
-        assert_eq!(window.pid, 4242);
-        assert_eq!(window.class, "firefox");
-        assert_eq!(window.caption, "Some Page");
-    }
-
-    /// Hyprland answers with an empty object when the workspace has no focused window.
-    #[test]
-    fn hyprland_empty_response_is_none() {
-        assert!(parse_hyprland("{}").is_none());
-        assert!(parse_hyprland("not json").is_none());
-    }
-
-    #[test]
-    fn niri_output_parses() {
-        let window =
-            parse_niri(r#"{"id":3,"pid":777,"app_id":"org.mozilla.firefox","title":"Page"}"#)
-                .expect("focused window");
-        assert_eq!(window.pid, 777);
-        assert_eq!(window.class, "org.mozilla.firefox");
-    }
-
-    #[test]
-    fn niri_null_response_is_none() {
-        assert!(parse_niri("null").is_none());
-    }
-
-    /// sway reports a tree; the focused leaf has to be dug out of it.
-    #[test]
-    fn sway_tree_yields_the_focused_leaf() {
-        let tree = r#"{
-            "type":"root","focused":false,"nodes":[
-              {"type":"output","focused":false,"nodes":[
-                {"type":"con","focused":false,"nodes":[
-                  {"type":"con","focused":false,"pid":10,"app_id":"alacritty","name":"term","nodes":[]},
-                  {"type":"con","focused":true,"pid":20,"app_id":"firefox","name":"Page","nodes":[]}
-                ]}
-              ]}
-            ]}"#;
-        let window = parse_i3_tree(tree).expect("focused window");
-        assert_eq!(window.pid, 20);
-        assert_eq!(window.class, "firefox");
-        assert_eq!(window.caption, "Page");
-    }
-
-    /// i3 has no app_id — that is a Wayland concept — and reports window_properties instead.
-    #[test]
-    fn i3_tree_falls_back_to_window_properties() {
-        let tree = r#"{
-            "type":"root","focused":false,"nodes":[
-              {"type":"con","focused":true,"pid":55,"name":"Page","nodes":[],
-               "window_properties":{"class":"Firefox","instance":"Navigator"}}
-            ]}"#;
-        let window = parse_i3_tree(tree).expect("focused window");
-        assert_eq!(window.pid, 55);
-        assert_eq!(window.class, "Firefox");
-    }
-
-    /// A focused container is not a window, so it must not be mistaken for one.
-    #[test]
-    fn focused_container_is_skipped_for_its_focused_child() {
-        let tree = r#"{
-            "type":"root","focused":true,"nodes":[
-              {"type":"con","focused":true,"pid":99,"app_id":"mpv","name":"Video","nodes":[]}
-            ]}"#;
-        let window = parse_i3_tree(tree).expect("focused window");
-        assert_eq!(window.pid, 99, "should descend to the leaf, not stop at the root");
-    }
-
-    #[test]
-    fn tree_with_nothing_focused_is_none() {
-        assert!(parse_i3_tree(r#"{"type":"root","focused":false,"nodes":[]}"#).is_none());
-    }
-
-    #[test]
-    fn a_pid_is_its_own_ancestor() {
-        let me = std::process::id();
-        assert!(is_same_or_descendant(me, me));
-    }
-
-    /// The case that matters: a browser's audio process is a child of the window's process.
-    #[test]
-    fn child_is_a_descendant_of_its_parent() {
-        let me = std::process::id();
-        let parent = parent_pid(me).expect("this process has a parent");
-        assert!(
-            is_same_or_descendant(me, parent),
-            "current process should be seen as descending from its parent"
-        );
-    }
-
-    #[test]
-    fn unrelated_pids_do_not_match() {
-        let me = std::process::id();
-        // pid 1 never descends from this test process.
-        assert!(!is_same_or_descendant(1, me));
-    }
-
-    #[test]
-    fn missing_pid_is_not_a_descendant() {
-        // Well above the default pid_max, so it cannot exist.
-        assert!(!is_same_or_descendant(u32::MAX - 1, std::process::id()));
-    }
-}
-
-
 /// How often the polling backends ask what is focused. Fast enough to feel immediate on a key
 /// press, slow enough that spawning a helper process is not a burden.
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(300);
@@ -774,4 +587,190 @@ fn probe_x11() -> Option<FocusedWindow> {
         caption,
         desktop_file: String::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |key: &str| map.get(key).cloned()
+    }
+
+    #[test]
+    fn wayland_compositors_are_detected_by_their_socket() {
+        assert_eq!(
+            detect_backend_from(env(&[("HYPRLAND_INSTANCE_SIGNATURE", "abc")])),
+            Some(Backend::Hyprland)
+        );
+        assert_eq!(
+            detect_backend_from(env(&[("NIRI_SOCKET", "/run/niri.sock")])),
+            Some(Backend::Niri)
+        );
+        assert_eq!(
+            detect_backend_from(env(&[("SWAYSOCK", "/run/sway.sock")])),
+            Some(Backend::Sway)
+        );
+        assert_eq!(
+            detect_backend_from(env(&[("XDG_CURRENT_DESKTOP", "KDE")])),
+            Some(Backend::KWin)
+        );
+    }
+
+    /// XWayland sets DISPLAY inside a Wayland session, where the X11 root window can only ever see
+    /// X11 clients. Picking X11 there would report stale focus forever.
+    #[test]
+    fn x11_is_only_chosen_for_a_real_x11_session() {
+        assert_eq!(
+            detect_backend_from(env(&[("DISPLAY", ":0"), ("XDG_SESSION_TYPE", "wayland")])),
+            None
+        );
+        assert_eq!(
+            detect_backend_from(env(&[("DISPLAY", ":0"), ("XDG_SESSION_TYPE", "x11")])),
+            Some(Backend::X11)
+        );
+    }
+
+    /// A compositor socket must win over the DISPLAY that XWayland also exports.
+    #[test]
+    fn compositor_socket_beats_display() {
+        assert_eq!(
+            detect_backend_from(env(&[
+                ("SWAYSOCK", "/run/sway.sock"),
+                ("DISPLAY", ":0"),
+                ("XDG_SESSION_TYPE", "x11"),
+            ])),
+            Some(Backend::Sway)
+        );
+    }
+
+    #[test]
+    fn empty_variables_do_not_count_as_present() {
+        assert_eq!(detect_backend_from(env(&[("SWAYSOCK", "")])), None);
+    }
+
+    #[test]
+    fn gnome_wayland_has_no_backend() {
+        assert_eq!(
+            detect_backend_from(env(&[
+                ("XDG_CURRENT_DESKTOP", "GNOME"),
+                ("XDG_SESSION_TYPE", "wayland"),
+            ])),
+            None
+        );
+    }
+
+    #[test]
+    fn hyprland_output_parses() {
+        let window = parse_hyprland(
+            r#"{"address":"0x1","pid":4242,"class":"firefox","title":"Some Page"}"#,
+        )
+        .expect("focused window");
+        assert_eq!(window.pid, 4242);
+        assert_eq!(window.class, "firefox");
+        assert_eq!(window.caption, "Some Page");
+    }
+
+    /// Hyprland answers with an empty object when the workspace has no focused window.
+    #[test]
+    fn hyprland_empty_response_is_none() {
+        assert!(parse_hyprland("{}").is_none());
+        assert!(parse_hyprland("not json").is_none());
+    }
+
+    #[test]
+    fn niri_output_parses() {
+        let window =
+            parse_niri(r#"{"id":3,"pid":777,"app_id":"org.mozilla.firefox","title":"Page"}"#)
+                .expect("focused window");
+        assert_eq!(window.pid, 777);
+        assert_eq!(window.class, "org.mozilla.firefox");
+    }
+
+    #[test]
+    fn niri_null_response_is_none() {
+        assert!(parse_niri("null").is_none());
+    }
+
+    /// sway reports a tree; the focused leaf has to be dug out of it.
+    #[test]
+    fn sway_tree_yields_the_focused_leaf() {
+        let tree = r#"{
+            "type":"root","focused":false,"nodes":[
+              {"type":"output","focused":false,"nodes":[
+                {"type":"con","focused":false,"nodes":[
+                  {"type":"con","focused":false,"pid":10,"app_id":"alacritty","name":"term","nodes":[]},
+                  {"type":"con","focused":true,"pid":20,"app_id":"firefox","name":"Page","nodes":[]}
+                ]}
+              ]}
+            ]}"#;
+        let window = parse_i3_tree(tree).expect("focused window");
+        assert_eq!(window.pid, 20);
+        assert_eq!(window.class, "firefox");
+        assert_eq!(window.caption, "Page");
+    }
+
+    /// i3 has no app_id — that is a Wayland concept — and reports window_properties instead.
+    #[test]
+    fn i3_tree_falls_back_to_window_properties() {
+        let tree = r#"{
+            "type":"root","focused":false,"nodes":[
+              {"type":"con","focused":true,"pid":55,"name":"Page","nodes":[],
+               "window_properties":{"class":"Firefox","instance":"Navigator"}}
+            ]}"#;
+        let window = parse_i3_tree(tree).expect("focused window");
+        assert_eq!(window.pid, 55);
+        assert_eq!(window.class, "Firefox");
+    }
+
+    /// A focused container is not a window, so it must not be mistaken for one.
+    #[test]
+    fn focused_container_is_skipped_for_its_focused_child() {
+        let tree = r#"{
+            "type":"root","focused":true,"nodes":[
+              {"type":"con","focused":true,"pid":99,"app_id":"mpv","name":"Video","nodes":[]}
+            ]}"#;
+        let window = parse_i3_tree(tree).expect("focused window");
+        assert_eq!(window.pid, 99, "should descend to the leaf, not stop at the root");
+    }
+
+    #[test]
+    fn tree_with_nothing_focused_is_none() {
+        assert!(parse_i3_tree(r#"{"type":"root","focused":false,"nodes":[]}"#).is_none());
+    }
+
+    #[test]
+    fn a_pid_is_its_own_ancestor() {
+        let me = std::process::id();
+        assert!(is_same_or_descendant(me, me));
+    }
+
+    /// The case that matters: a browser's audio process is a child of the window's process.
+    #[test]
+    fn child_is_a_descendant_of_its_parent() {
+        let me = std::process::id();
+        let parent = parent_pid(me).expect("this process has a parent");
+        assert!(
+            is_same_or_descendant(me, parent),
+            "current process should be seen as descending from its parent"
+        );
+    }
+
+    #[test]
+    fn unrelated_pids_do_not_match() {
+        let me = std::process::id();
+        // pid 1 never descends from this test process.
+        assert!(!is_same_or_descendant(1, me));
+    }
+
+    #[test]
+    fn missing_pid_is_not_a_descendant() {
+        // Well above the default pid_max, so it cannot exist.
+        assert!(!is_same_or_descendant(u32::MAX - 1, std::process::id()));
+    }
 }

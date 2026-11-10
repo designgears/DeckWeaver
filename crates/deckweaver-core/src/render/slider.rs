@@ -6,7 +6,6 @@
 //! crop a quarter turn.
 
 use super::common::*;
-use super::text::{draw_text, truncate_to_width, TextAlign, TextStyle};
 use super::theme;
 use tiny_skia::Pixmap;
 
@@ -31,22 +30,12 @@ impl SliderRenderer {
     /// Dimmed placeholder with a reason, used instead of the fault cross when an app action simply
     /// has nothing playing to control.
     pub fn render_idle_internal(&self, message: &str) -> Option<(Vec<u8>, u32, u32)> {
-        let mut pixmap = create_filled_pixmap(self.button_size, self.button_size, theme::IDLE_BG)?;
-        let width = self.button_size as f32 - theme::PAD * 2.0;
-        let label = truncate_to_width(message, width, theme::LABEL_SIZE);
-        draw_text(
-            &mut pixmap,
-            &label,
-            Rect::new(
-                theme::PAD,
-                (self.button_size as f32 - theme::LABEL_SIZE) * 0.5,
-                width,
-                theme::LABEL_SIZE * 1.4,
-                0.0,
-            ),
-            &TextStyle::new(theme::LABEL_SIZE, theme::TEXT_IDLE, TextAlign::Center),
-        );
-        pixmap_to_rgba(&pixmap)
+        pixmap_to_rgba(&create_idle_pixmap(
+            self.button_size,
+            self.button_size,
+            message,
+            theme::LABEL_SIZE,
+        )?)
     }
 
     pub fn render_unavailable_internal(&self) -> Option<(Vec<u8>, u32, u32)> {

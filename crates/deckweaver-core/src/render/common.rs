@@ -1,3 +1,4 @@
+use super::text::{draw_text, truncate_to_width, TextAlign, TextStyle};
 use super::theme;
 use image::RgbaImage;
 use tiny_skia::{Color, FillRule, Mask, Paint, PathBuilder, Pixmap, Stroke, Transform};
@@ -53,7 +54,6 @@ impl Rgba {
     pub fn with_alpha(self, a: u8) -> Self {
         Self { a, ..self }
     }
-
 }
 
 impl From<(u8, u8, u8)> for Rgba {
@@ -349,6 +349,32 @@ pub fn create_filled_pixmap(width: u32, height: u32, color: Rgba) -> Option<Pixm
     Some(pixmap)
 }
 
+/// A dimmed placeholder with a centred one-line reason, for an app action with nothing to
+/// control. Shared by every renderer's `render_idle_internal`.
+pub fn create_idle_pixmap(
+    width: u32,
+    height: u32,
+    message: &str,
+    text_size: f32,
+) -> Option<Pixmap> {
+    let mut pixmap = create_filled_pixmap(width, height, theme::IDLE_BG)?;
+    let text_w = width as f32 - theme::PAD * 2.0;
+    let label = truncate_to_width(message, text_w, text_size);
+    draw_text(
+        &mut pixmap,
+        &label,
+        Rect::new(
+            theme::PAD,
+            (height as f32 - text_size) * 0.5,
+            text_w,
+            text_size * 1.4,
+            0.0,
+        ),
+        &TextStyle::new(text_size, theme::TEXT_IDLE, TextAlign::Center),
+    );
+    Some(pixmap)
+}
+
 /// Source-over blit of an RGBA image onto `pixmap`.
 ///
 /// Shared by the icon compositing in every renderer and by the text pipeline; previously each
@@ -361,7 +387,13 @@ pub fn blit_rgba8(pixmap: &mut Pixmap, rgba: &RgbaImage, dest_x: i32, dest_y: i3
 ///
 /// The source RGB is ignored and its alpha is scaled by `color.a`, so one rasterised mask can
 /// be drawn as a shadow, a halo and the glyphs themselves without re-rasterising.
-pub fn blit_alpha_tinted(pixmap: &mut Pixmap, rgba: &RgbaImage, dest_x: i32, dest_y: i32, color: Rgba) {
+pub fn blit_alpha_tinted(
+    pixmap: &mut Pixmap,
+    rgba: &RgbaImage,
+    dest_x: i32,
+    dest_y: i32,
+    color: Rgba,
+) {
     if color.a == 0 {
         return;
     }

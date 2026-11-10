@@ -669,7 +669,7 @@ impl Monitor {
         self.stream = open_monitor_stream(&mut self.context, self.index, &self.monitor_source);
         if self.stream.is_none() {
             // Make `is_dead` pick it up rather than retrying on a broken connection.
-            let _ = self.context.disconnect();
+            self.context.disconnect();
         }
     }
 }
@@ -791,8 +791,10 @@ fn read_peaks(monitors: &mut HashMap<u32, Monitor>, shared: &Shared) {
                 Ok(PeekResult::Data(bytes)) => {
                     got_data = true;
                     for sample in bytes
-                        .chunks_exact(4)
-                        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]).abs())
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| f32::from_ne_bytes(*c).abs())
                     {
                         monitor.window_peak = monitor.window_peak.max(sample);
                     }
@@ -1039,7 +1041,7 @@ fn aggregate_with_sinks(raw: Vec<RawStream>, sinks: &HashMap<u32, SinkMeta>) -> 
         .filter_map(|key| by_key.remove(&key))
         .collect();
     // Stable, predictable ordering for the property inspector lists.
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|a| a.name.to_lowercase());
     apps
 }
 

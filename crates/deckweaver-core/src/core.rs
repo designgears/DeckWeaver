@@ -1,4 +1,4 @@
-use crate::action::{ActionConfig, ActionState, ActionType};
+use crate::action::{ActionConfig, ActionState, ActionType, CachedBaseRender, CachedIcon};
 use crate::devices::{apply_patch_op, Device, DeviceType, HardwareDevice, Status};
 use crate::render::{
     pixmap_to_rgba, ButtonRenderer, KnobRenderer, RenderParams, SliderRenderer, KNOB_ICON_SIZE,
@@ -17,6 +17,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 const RENDER_INTERVAL: Duration = Duration::from_micros(33333);
 const DEFAULT_HOST: &str = "localhost";
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+/// Per-device cap on how often a PipeWeaver meter reading is stored (30fps).
+const METER_THROTTLE: Duration = Duration::from_millis(33);
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_PORT: u16 = 14565;
@@ -74,7 +76,7 @@ enum Command {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PendingUpdate {
     pub image: Option<Vec<u8>>,
     pub width: Option<u32>,
@@ -148,24 +150,7 @@ impl DeckWeaverCore {
     }
 
     pub fn get_pending_updates(&self) -> HashMap<String, PendingUpdate> {
-        let mut updates = self.pending_updates.write();
-        let collected: HashMap<String, PendingUpdate> = updates
-            .iter()
-            .map(|(id, update)| {
-                (
-                    id.clone(),
-                    PendingUpdate {
-                        image: update.image.clone(),
-                        width: update.width,
-                        height: update.height,
-                        image_hash: update.image_hash,
-                        label: update.label.clone(),
-                    },
-                )
-            })
-            .collect();
-        updates.clear();
-        collected
+        std::mem::take(&mut *self.pending_updates.write())
     }
 
     pub fn is_available(&self) -> bool {
@@ -190,36 +175,20 @@ impl DeckWeaverCore {
     /// The focus sentinel is resolved here rather than when the action was configured, so a press
     /// acts on whatever holds focus at that instant.
     pub fn set_app_volume_relative(&self, device_id: &str, delta: i16) -> bool {
-        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
-            return false;
-        };
-        self.pulse.adjust_volume(&key, delta);
-        true
+        self.with_app_key(device_id, |key| self.pulse.adjust_volume(key, delta))
     }
 
     /// Set an app's volume to an absolute 0-100.
     pub fn set_app_volume(&self, device_id: &str, volume: u8) -> bool {
-        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
-            return false;
-        };
-        self.pulse.set_volume(&key, volume);
-        true
+        self.with_app_key(device_id, |key| self.pulse.set_volume(key, volume))
     }
 
     pub fn set_app_mute(&self, device_id: &str, muted: bool) -> bool {
-        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
-            return false;
-        };
-        self.pulse.set_mute(&key, muted);
-        true
+        self.with_app_key(device_id, |key| self.pulse.set_mute(key, muted))
     }
 
     pub fn toggle_app_mute(&self, device_id: &str) -> bool {
-        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
-            return false;
-        };
-        self.pulse.toggle_mute(&key);
-        true
+        self.with_app_key(device_id, |key| self.pulse.toggle_mute(key))
     }
 
     /// True once focus tracking is live. False on desktops with no supported compositor, which is
@@ -239,89 +208,56 @@ impl DeckWeaverCore {
     }
 
     pub fn get_devices(&self) -> Vec<Device> {
-        self.status
-            .read()
-            .as_ref()
-            .map(Status::get_all_devices)
+        self.with_status(Status::get_all_devices)
             .unwrap_or_default()
     }
 
     pub fn get_sources(&self) -> Vec<Device> {
-        self.status
-            .read()
-            .as_ref()
-            .map(Status::get_sources)
-            .unwrap_or_default()
+        self.with_status(Status::get_sources).unwrap_or_default()
     }
 
     pub fn get_targets(&self) -> Vec<Device> {
-        self.status
-            .read()
-            .as_ref()
-            .map(Status::get_targets)
-            .unwrap_or_default()
+        self.with_status(Status::get_targets).unwrap_or_default()
     }
 
     pub fn get_physical_sources(&self) -> Vec<Device> {
-        self.status
-            .read()
-            .as_ref()
-            .map(Status::get_physical_sources)
+        self.with_status(Status::get_physical_sources)
             .unwrap_or_default()
     }
 
     pub fn get_physical_targets(&self) -> Vec<Device> {
-        self.status
-            .read()
-            .as_ref()
-            .map(Status::get_physical_targets)
+        self.with_status(Status::get_physical_targets)
             .unwrap_or_default()
     }
 
-    pub     fn get_device(&self, device_id: &str, device_type: Option<DeviceType>) -> Option<Device> {
-        self.status
-            .read()
-            .as_ref()
-            .and_then(|s| s.get_device(device_id, device_type))
+    pub fn get_device(&self, device_id: &str, device_type: Option<DeviceType>) -> Option<Device> {
+        self.with_status(|s| s.get_device(device_id, device_type))
+            .flatten()
     }
 
     pub fn get_target_sources(&self, target_id: &str) -> Vec<Device> {
-        self.status
-            .read()
-            .as_ref()
-            .map(|s| s.get_target_sources(target_id))
+        self.with_status(|s| s.get_target_sources(target_id))
             .unwrap_or_default()
     }
 
     pub fn get_output_hardware_devices(&self) -> Vec<HardwareDevice> {
-        self.status
-            .read()
-            .as_ref()
-            .map(Status::get_output_hardware_devices)
+        self.with_status(Status::get_output_hardware_devices)
             .unwrap_or_default()
     }
 
     pub fn get_input_hardware_devices(&self) -> Vec<HardwareDevice> {
-        self.status
-            .read()
-            .as_ref()
-            .map(Status::get_input_hardware_devices)
+        self.with_status(Status::get_input_hardware_devices)
             .unwrap_or_default()
     }
 
     pub fn get_hardware_device_name(&self, node_id: u32, is_input: bool) -> Option<String> {
-        self.status
-            .read()
-            .as_ref()
-            .and_then(|s| s.get_hardware_device_name(node_id, is_input))
+        self.with_status(|s| s.get_hardware_device_name(node_id, is_input))
+            .flatten()
     }
 
     /// Whether `source_id` is routed into `target_id`, or `None` before PipeWeaver has reported.
     pub fn is_routed(&self, source_id: &str, target_id: &str) -> Option<bool> {
-        self.status
-            .read()
-            .as_ref()
-            .map(|status| status.is_routed(source_id, target_id))
+        self.with_status(|status| status.is_routed(source_id, target_id))
     }
 
     pub fn set_route(&self, source_id: &str, target_id: &str, enabled: bool) -> bool {
@@ -340,13 +276,11 @@ impl DeckWeaverCore {
     }
 
     pub fn infer_device_type(&self, device_id: &str, prefer_target: bool) -> Option<DeviceType> {
-        self.status
-            .read()
-            .as_ref()
-            .and_then(|status| status.infer_device_type(device_id, prefer_target))
+        self.with_status(|status| status.infer_device_type(device_id, prefer_target))
+            .flatten()
     }
 
-    pub     fn set_volume(&self, device_id: &str, volume: u8, device_type: Option<DeviceType>) -> bool {
+    pub fn set_volume(&self, device_id: &str, volume: u8, device_type: Option<DeviceType>) -> bool {
         self.send_command(Command::SetVolume {
             device_id: device_id.to_string(),
             device_type,
@@ -354,7 +288,7 @@ impl DeckWeaverCore {
         })
     }
 
-    pub     fn set_volume_relative(
+    pub fn set_volume_relative(
         &self,
         device_id: &str,
         delta: i8,
@@ -367,7 +301,7 @@ impl DeckWeaverCore {
         })
     }
 
-    pub     fn toggle_mute(&self, device_id: &str, device_type: Option<DeviceType>) -> bool {
+    pub fn toggle_mute(&self, device_id: &str, device_type: Option<DeviceType>) -> bool {
         self.send_command(Command::ToggleMute {
             device_id: device_id.to_string(),
             device_type,
@@ -405,75 +339,38 @@ impl DeckWeaverCore {
     }
 
     pub fn toggle_target_mute(&self, device_id: &str) -> bool {
-        let muted = {
-            self.status
-                .read()
-                .as_ref()
-                .and_then(|status| status.get_device(device_id, Some(DeviceType::Target)))
-                .map(|device| device.is_muted)
-        };
-
-        muted.is_some_and(|muted| {
-            self.send_command(Command::SetTargetMute {
-                device_id: device_id.to_string(),
-                muted: !muted,
-            })
-        })
+        self.get_device(device_id, Some(DeviceType::Target))
+            .is_some_and(|device| self.set_target_mute(device_id, !device.is_muted))
     }
 
     pub fn toggle_target_mix(&self, device_id: &str) -> bool {
-        let mix_b = {
-            self.status
-                .read()
-                .as_ref()
-                .and_then(|status| status.get_device(device_id, Some(DeviceType::Target)))
-                .and_then(|device| device.target_mix_b)
-        };
-
-        mix_b.is_some_and(|mix_b| {
-            self.send_command(Command::SetTargetMix {
-                device_id: device_id.to_string(),
-                mix_b: !mix_b,
-            })
-        })
+        self.get_device(device_id, Some(DeviceType::Target))
+            .and_then(|device| device.target_mix_b)
+            .is_some_and(|mix_b| self.set_target_mix(device_id, !mix_b))
     }
 
     pub fn toggle_source_volumes_linked(&self, device_id: &str) -> bool {
-        let linked = {
-            self.status
-                .read()
-                .as_ref()
-                .and_then(|status| status.get_device(device_id, Some(DeviceType::Source)))
-                .and_then(|device| device.source_volumes_linked)
-        };
-
-        linked.is_some_and(|linked| {
-            self.send_command(Command::SetSourceVolumesLinked {
-                device_id: device_id.to_string(),
-                linked: !linked,
+        self.get_device(device_id, Some(DeviceType::Source))
+            .and_then(|device| device.source_volumes_linked)
+            .is_some_and(|linked| {
+                self.send_command(Command::SetSourceVolumesLinked {
+                    device_id: device_id.to_string(),
+                    linked: !linked,
+                })
             })
-        })
     }
 
     pub fn apply_mute_profile(&self, config: &ActionConfig) -> bool {
         let Some(device_id) = &config.device_id else {
             return false;
         };
-        let idx = config.mute_profile_index as usize;
-        if idx >= config.mute_profile_data.len() {
+        let Some(&muted) = config
+            .mute_profile_data
+            .get(config.mute_profile_index as usize)
+        else {
             return false;
-        }
-        let muted = config.mute_profile_data[idx];
-        match config.device_type {
-            Some(DeviceType::Source) => {
-                let mix_b = idx == 1;
-                self.set_source_mute(device_id, mix_b, muted)
-            }
-            Some(DeviceType::Target) => {
-                self.set_target_mute(device_id, muted)
-            }
-            _ => false,
-        }
+        };
+        self.send_profile_mute(config, device_id, muted)
     }
 
     /// Flip the active mute profile.
@@ -495,13 +392,7 @@ impl DeckWeaverCore {
         let sent = if is_app {
             self.set_app_mute(device_id, muted)
         } else {
-            match config.device_type {
-                Some(DeviceType::Source) => {
-                    self.set_source_mute(device_id, config.mute_profile_index == 1, muted)
-                }
-                Some(DeviceType::Target) => self.set_target_mute(device_id, muted),
-                _ => false,
-            }
+            self.send_profile_mute(config, device_id, muted)
         };
         sent.then_some(muted)
     }
@@ -514,21 +405,24 @@ impl DeckWeaverCore {
         self.switch_physical_hardware_device(source_id, node_id, true)
     }
 
-    pub fn switch_physical_hardware_device(&self, device_id: &str, node_id: u32, is_input: bool) -> bool {
-        let Some(status) = self.status.read().as_ref().cloned() else {
+    pub fn switch_physical_hardware_device(
+        &self,
+        device_id: &str,
+        node_id: u32,
+        is_input: bool,
+    ) -> bool {
+        let Some(attached) = self.with_status(|status| {
+            if is_input {
+                status.get_attached_input_hardware_devices(device_id)
+            } else {
+                status.get_attached_output_hardware_devices(device_id)
+            }
+        }) else {
             return false;
         };
-
-        let attached = if is_input {
-            status.get_attached_input_hardware_devices(device_id)
-        } else {
-            status.get_attached_output_hardware_devices(device_id)
-        };
-        let already_attached = attached.iter().any(|device| {
-            device
-                .node_id
-                .is_some_and(|attached_id| attached_id == node_id)
-        });
+        let already_attached = attached
+            .iter()
+            .any(|device| device.node_id == Some(node_id));
 
         let mut success = true;
 
@@ -539,13 +433,11 @@ impl DeckWeaverCore {
             });
         }
 
+        // Everything else attached to this device goes, unmatched descriptors included.
         let mut remove_indices: Vec<usize> = attached
             .iter()
-            .filter_map(|device| match (device.attachment_index, device.node_id) {
-                (Some(index), Some(attached_id)) if attached_id != node_id => Some(index),
-                (Some(index), None) => Some(index),
-                _ => None,
-            })
+            .filter(|device| device.node_id != Some(node_id))
+            .filter_map(|device| device.attachment_index)
             .collect();
         remove_indices.sort_unstable_by(|a, b| b.cmp(a));
 
@@ -568,7 +460,39 @@ impl DeckWeaverCore {
     }
 }
 
+impl Default for DeckWeaverCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeckWeaverCore {
+    fn with_status<T>(&self, f: impl FnOnce(&Status) -> T) -> Option<T> {
+        self.status.read().as_ref().map(f)
+    }
+
+    /// Resolve an app action's device id (following focus if it is the focus sentinel) and run
+    /// `f` on the stream key. False when no app currently matches.
+    fn with_app_key(&self, device_id: &str, f: impl FnOnce(&str)) -> bool {
+        let Some(key) = self.pulse.resolve_key(device_id, &self.focus) else {
+            return false;
+        };
+        f(&key);
+        true
+    }
+
+    /// Set the mute of the action's active profile: a source's "Mute 1" / "Mute 2" by
+    /// `mute_profile_index`, a target's single mute.
+    fn send_profile_mute(&self, config: &ActionConfig, device_id: &str, muted: bool) -> bool {
+        match config.device_type {
+            Some(DeviceType::Source) => {
+                self.set_source_mute(device_id, config.mute_profile_index == 1, muted)
+            }
+            Some(DeviceType::Target) => self.set_target_mute(device_id, muted),
+            None => false,
+        }
+    }
+
     /// Send command to WebSocket thread. Never blocks: uses try_send so button presses
     /// cannot stall the UI if the WebSocket is slow or reconnecting.
     fn send_command(&self, cmd: Command) -> bool {
@@ -619,10 +543,10 @@ impl DeckWeaverCore {
                             "id": initial_id,
                             "data": "GetStatus"
                         });
-                        if let Ok(json) = serde_json::to_string(&initial_request) {
-                            if write.send(Message::Text(json.into())).await.is_err() {
-                                break;
-                            }
+                        if let Ok(json) = serde_json::to_string(&initial_request)
+                            && write.send(Message::Text(json.into())).await.is_err()
+                        {
+                            break;
                         }
 
                         loop {
@@ -687,15 +611,9 @@ impl DeckWeaverCore {
                 rt.block_on(async move {
                     let url = format!("ws://{}:{}/api/websocket/meter", DEFAULT_HOST, DEFAULT_PORT);
                     let mut last_update: HashMap<String, Instant> = HashMap::new();
-                    let throttle = Duration::from_millis(33); // 30fps
 
                     while running.load(Ordering::SeqCst) {
-                        let has_meters_enabled = {
-                            let guard = actions.read();
-                            guard.values().any(|s| s.config.meters_enabled)
-                        };
-
-                        if !has_meters_enabled {
+                        if !any_meters_enabled(&actions) {
                             tokio::time::sleep(Duration::from_secs(1)).await;
                             continue;
                         }
@@ -710,52 +628,12 @@ impl DeckWeaverCore {
                         let (_, mut read) = ws.split();
                         last_update.clear();
 
-                        loop {
-                            let has_meters_enabled = {
-                                let guard = actions.read();
-                                guard.values().any(|s| s.config.meters_enabled)
-                            };
-
-                            if !has_meters_enabled {
-                                break;
-                            }
-
+                        while any_meters_enabled(&actions) {
                             tokio::select! {
                                 msg = read.next() => {
                                     match msg {
                                         Some(Ok(Message::Text(text))) => {
-                                            match serde_json::from_str::<Value>(&text) {
-                                                Ok(data) => {
-                                                    if let (Some(id), Some(percent)) = (
-                                                        data.get("id").and_then(|v| v.as_str()),
-                                                        data.get("percent").and_then(|v| v.as_u64()),
-                                                    ) {
-                                                        let device_needs_meters = {
-                                                            let guard = actions.read();
-                                                            guard.values().any(|s| {
-                                                                s.config.meters_enabled &&
-                                                                s.config.device_id.as_ref().is_some_and(|did| did == id)
-                                                            })
-                                                        };
-
-                                                        if device_needs_meters {
-                                                            let now = Instant::now();
-                                                            let should_update = last_update
-                                                                .get(id)
-                                                                .map(|t| now.duration_since(*t) >= throttle)
-                                                                .unwrap_or(true);
-
-                                                            if should_update {
-                                                                last_update.insert(id.to_string(), now);
-                                                                meter_data.write().insert(id.to_string(), percent as u8);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    tracing::warn!("Failed to parse meter message as JSON: {} (message: {})", e, text.chars().take(200).collect::<String>());
-                                                }
-                                            }
+                                            handle_meter_message(&text, &actions, &meter_data, &mut last_update);
                                         }
                                         Some(Err(_)) | None => break,
                                         _ => {}
@@ -791,7 +669,7 @@ impl DeckWeaverCore {
         std::thread::Builder::new()
             .name("deckweaver-render".into())
             .spawn(move || {
-                let mut renderers = Renderers::new();
+                let mut renderers = Renderers::default();
                 // Tracked as a pair because the two backends come and go independently, and a
                 // change in either has to force a re-render of the actions that depend on it.
                 let mut last_available = (false, false);
@@ -803,7 +681,6 @@ impl DeckWeaverCore {
                     let availability_changed =
                         (pipeweaver_available, pulse_available) != last_available;
                     last_available = (pipeweaver_available, pulse_available);
-                    let mut label_updates = Vec::new();
 
                     let action_ids: Vec<String> = {
                         let guard = actions.read();
@@ -813,12 +690,13 @@ impl DeckWeaverCore {
                                 && s.config
                                     .device_id
                                     .as_deref()
-                                    .is_some_and(|id| crate::pulse::app_key_from_device_id(id).is_some())
+                                    .is_some_and(DeckWeaverCore::is_app_device)
                         });
                         pulse.set_metering(wants_app_meters);
                         guard.keys().cloned().collect()
                     };
 
+                    let mut label_updates = Vec::new();
                     {
                         let status_guard = status.read();
                         let mut actions_guard = actions.write();
@@ -827,123 +705,20 @@ impl DeckWeaverCore {
                             let Some(state) = actions_guard.get_mut(&action_id) else {
                                 continue;
                             };
-                            let Some(device_id) = state.config.device_id.as_ref() else {
-                                continue;
-                            };
-
-                            // App actions resolve against the sound server instead of the
-                            // PipeWeaver status, keyed off the `app:` prefix in the device id.
-                            state.device = if crate::pulse::app_key_from_device_id(device_id)
-                                .is_some()
-                            {
-                                let app = pulse.app_for(device_id, &focus);
-                                // Routing and icon are properties of whichever app is resolved
-                                // right now, which changes under a focus-following action, so
-                                // they are refreshed every frame rather than at configure time.
-                                state.config.routed_to =
-                                    app.as_ref().and_then(|a| a.routed_to.clone());
-                                state.config.app_icon_path = app.as_ref().and_then(|a| {
-                                    crate::icon_loader::find_icon_for_app(
-                                        a.icon_name.as_deref(),
-                                        &a.name,
-                                        Some(&a.key),
-                                        a.steam_app_id.as_deref(),
-                                    )
-                                });
-                                app.map(|a| a.to_device())
-                            } else {
-                                status_guard
-                                    .as_ref()
-                                    .and_then(|st| {
-                                        st.get_device(device_id, state.config.device_type).or_else(
-                                            || {
-                                                if state.config.action_type == ActionType::Slider {
-                                                    st.get_device(device_id, None)
-                                                } else {
-                                                    None
-                                                }
-                                            },
-                                        )
-                                    })
-                                    .map(|device| {
-                                        device.with_selected_source_mix(state.config.source_mix_b)
-                                    })
-                                    .map(|mut device| {
-                                        // A route toggle reads "muted" while the route is off.
-                                        if let (Some(st), Some(target_id)) = (
-                                            status_guard.as_ref(),
-                                            state.config.route_target_id.as_deref(),
-                                        ) {
-                                            device.is_muted =
-                                                !st.is_routed(&device.id, target_id);
-                                        }
-                                        device
-                                    })
-                            };
-
-                            // PipeWeaver devices take their level from the PipeWeaver meter
-                            // feed; app streams take theirs from the PulseAudio peak monitors,
-                            // resolved through the same app the key is currently controlling.
-                            if !state.config.meters_enabled {
-                                state.set_meter(0);
-                            } else if crate::pulse::app_key_from_device_id(device_id).is_some() {
-                                let level = state
-                                    .device
-                                    .as_ref()
-                                    .and_then(|d| crate::pulse::app_key_from_device_id(&d.id))
-                                    .map(|key| pulse.peak(key))
-                                    .unwrap_or(0);
-                                state.set_meter(level);
-                            } else {
-                                let meter_guard = meter_data.read();
-                                if let Some(&meter) = meter_guard.get(device_id) {
-                                    state.set_meter(meter);
-                                }
-                            }
-
-                            // A route toggle's label names both ends so the key says what it
-                            // connects. Only the label: the device keeps its own name, which is
-                            // also what the host shows as the selected source.
-                            let label = state.device.as_ref().map(|device| {
-                                status_guard
-                                    .as_ref()
-                                    .zip(state.config.route_target_id.as_deref())
-                                    .and_then(|(st, target_id)| {
-                                        st.get_device(target_id, Some(DeviceType::Target))
-                                    })
-                                    .map(|target| format!("{}\n→ {}", device.name, target.name))
-                                    .unwrap_or_else(|| device.name.clone())
-                            });
-                            if let Some(label) = label {
-                                if state.label_changed(Some(&label)) {
-                                    label_updates.push((action_id, label));
-                                }
+                            if let Some(label) = refresh_action(
+                                state,
+                                status_guard.as_ref(),
+                                &meter_data,
+                                &pulse,
+                                &focus,
+                            ) {
+                                label_updates.push((action_id, label));
                             }
                         }
                     }
+                    queue_labels(&pending_updates, label_updates);
 
-                    if !label_updates.is_empty() {
-                        let mut updates = pending_updates.write();
-                        for (action_id, label) in label_updates {
-                            let should_update =
-                                updates.get(&action_id).and_then(|u| u.label.as_ref())
-                                    != Some(&label);
-
-                            if should_update {
-                                let update =
-                                    updates.entry(action_id).or_insert_with(|| PendingUpdate {
-                                        image: None,
-                                        width: None,
-                                        height: None,
-                                        image_hash: None,
-                                        label: None,
-                                    });
-                                update.label = Some(label);
-                            }
-                        }
-                    }
-
-                    let tasks: Vec<_> = {
+                    let tasks: Vec<RenderTask> = {
                         let guard = actions.read();
                         guard
                             .iter()
@@ -954,186 +729,14 @@ impl DeckWeaverCore {
                                 s.needs_render()
                             })
                             .map(|(id, s)| {
-                                let max_icon_size = match s.config.action_type {
-                                    ActionType::Knob => KNOB_ICON_SIZE,
-                                    _ => (s.config.width as f32) * 0.5,
-                                };
-                                // Explicit user choice first, the app's own icon only as a
-                                // fallback, so setting a custom icon always overrides it.
-                                let icon_path = s
-                                    .config
-                                    .icon_path
-                                    .as_deref()
-                                    .or(s.config.app_icon_path.as_deref());
-                                let cached_icon = s.get_cached_icon(
-                                    s.config.icon_png.as_deref(),
-                                    icon_path,
-                                    max_icon_size,
-                                );
-
-                                let uses_knob_meter_cache = s.config.action_type
-                                    == ActionType::Knob
-                                    && s.config.meters_enabled;
-                                let needs_knob_base_rebuild =
-                                    uses_knob_meter_cache && s.needs_base_rebuild();
-
-                                let cached_knob_base =
-                                    if uses_knob_meter_cache && !needs_knob_base_rebuild {
-                                        s.cached_base.read().clone()
-                                    } else {
-                                        None
-                                    };
-
-                                // Each action is gated on the backend it actually talks to, so a
-                                // dead PipeWeaver connection no longer blanks the app actions
-                                // (and vice versa).
-                                let is_app_action = s
-                                    .config
-                                    .device_id
-                                    .as_deref()
-                                    .and_then(crate::pulse::app_key_from_device_id)
-                                    .is_some();
-                                let action_available = if is_app_action {
-                                    pulse_available
-                                } else {
-                                    pipeweaver_available
-                                };
-
-                                // Tint the bar with the app's own icon, so a key reads as that
-                                // app at a glance. Only when nothing more specific applies: an
-                                // explicit volume_bar_color still wins in `accent_color`, and a
-                                // PipeWeaver device keeps whatever colour PipeWeaver assigned it.
-                                let mut device = s.device.clone();
-                                if is_app_action
-                                    && let Some(dev) = device.as_mut()
-                                    && dev.color.is_none()
-                                    && let Some((red, green, blue)) =
-                                        cached_icon.as_ref().and_then(|icon| icon.accent)
-                                {
-                                    dev.color = Some(crate::devices::DeviceColor {
-                                        red,
-                                        green,
-                                        blue,
-                                    });
-                                }
-
-                                (
-                                    id.clone(),
-                                    s.config.clone(),
-                                    device,
-                                    s.get_meter(),
-                                    cached_icon,
-                                    cached_knob_base,
-                                    uses_knob_meter_cache,
-                                    needs_knob_base_rebuild,
-                                    is_app_action,
-                                    action_available,
-                                )
+                                RenderTask::snapshot(id, s, pipeweaver_available, pulse_available)
                             })
                             .collect()
                     };
 
-                    for (
-                        action_id,
-                        config,
-                        device,
-                        meter,
-                        cached_icon,
-                        cached_knob_base,
-                        uses_knob_meter_cache,
-                        needs_knob_base_rebuild,
-                        is_app_action,
-                        available,
-                    ) in tasks
-                    {
-                        let cached_knob_base = if uses_knob_meter_cache && needs_knob_base_rebuild {
-                            if let Some(ref dev) = device {
-                                let params = knob_render_params(&config, dev, 0);
-                                let base_pixmap = renderers.knob(config.width, config.height).render_base(
-                                    &params,
-                                    config.icon_png.clone(),
-                                    cached_icon.as_ref(),
-                                );
-
-                                if let Some(base_pixmap) = base_pixmap {
-                                    let guard = actions.read();
-                                    if let Some(state) = guard.get(&action_id) {
-                                        let base_hash = state.base_hash();
-                                        let cached = crate::action::CachedBaseRender {
-                                            pixmap: base_pixmap.clone(),
-                                            base_hash,
-                                        };
-                                        *state.cached_base.write() = Some(cached.clone());
-                                        Some(cached)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            cached_knob_base
-                        };
-
-                        let result = if !available {
-                            if is_app_action {
-                                // No sound server is a real fault, but the app actions should not
-                                // suddenly sprout a red cross across the deck for it either.
-                                renderers.render_idle(&config, "No audio server")
-                            } else {
-                                renderers.render_unavailable(&config)
-                            }
-                        } else if let Some(ref dev) = device {
-                            renderers.render_with_cached(
-                                &config,
-                                dev,
-                                meter,
-                                cached_icon.as_ref(),
-                                cached_knob_base.as_ref(),
-                            )
-                        } else if config.device_id.is_some()
-                            // An app that is not currently playing has no stream to control, and
-                            // the sound server is already known good here, so this is a settled
-                            // "nothing to show" rather than a state still being fetched.
-                            && (is_app_action || status.read().is_some())
-                        {
-                            if is_app_action {
-                                // Nothing playing is the resting state of a focus-following knob,
-                                // not a fault, so it says so rather than showing an error.
-                                renderers.render_idle(&config, "No sound playing")
-                            } else {
-                                renderers.render_unavailable(&config)
-                            }
-                        } else {
-                            renderers.render_loading(&config)
-                        };
-
-                        if let Some((bytes, width, height)) = result {
-                            let mut hasher = DefaultHasher::new();
-                            bytes.hash(&mut hasher);
-                            let image_hash = hasher.finish();
-
-                            let mut updates = pending_updates.write();
-                            let should_update = updates.get(&action_id).and_then(|u| u.image_hash)
-                                != Some(image_hash);
-
-                            if should_update {
-                                let update =
-                                    updates.entry(action_id).or_insert_with(|| PendingUpdate {
-                                        image: None,
-                                        width: None,
-                                        height: None,
-                                        image_hash: None,
-                                        label: None,
-                                    });
-                                update.image = Some(bytes);
-                                update.width = Some(width);
-                                update.height = Some(height);
-                                update.image_hash = Some(image_hash);
-                            }
+                    for task in tasks {
+                        if let Some(frame) = render_task(&mut renderers, &actions, &status, &task) {
+                            queue_image(&pending_updates, task.action_id, frame);
                         }
                     }
 
@@ -1153,7 +756,325 @@ impl Drop for DeckWeaverCore {
     }
 }
 
-fn handle_ws_message(text: &str, status: &Arc<RwLock<Option<Status>>>) {
+/// Raw RGBA bytes plus their width and height, as every renderer returns them.
+type Frame = (Vec<u8>, u32, u32);
+
+fn any_meters_enabled(actions: &RwLock<HashMap<String, ActionState>>) -> bool {
+    actions.read().values().any(|s| s.config.meters_enabled)
+}
+
+/// Store one PipeWeaver meter reading, if an action is metering that device, at most once per
+/// `METER_THROTTLE` per device.
+fn handle_meter_message(
+    text: &str,
+    actions: &RwLock<HashMap<String, ActionState>>,
+    meter_data: &RwLock<HashMap<String, u8>>,
+    last_update: &mut HashMap<String, Instant>,
+) {
+    let data = match serde_json::from_str::<Value>(text) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to parse meter message as JSON: {} (message: {})",
+                e,
+                text.chars().take(200).collect::<String>()
+            );
+            return;
+        }
+    };
+    let (Some(id), Some(percent)) = (
+        data.get("id").and_then(|v| v.as_str()),
+        data.get("percent").and_then(|v| v.as_u64()),
+    ) else {
+        return;
+    };
+
+    let device_needs_meters = actions
+        .read()
+        .values()
+        .any(|s| s.config.meters_enabled && s.config.device_id.as_deref() == Some(id));
+    if !device_needs_meters {
+        return;
+    }
+
+    let now = Instant::now();
+    let should_update = last_update
+        .get(id)
+        .is_none_or(|t| now.duration_since(*t) >= METER_THROTTLE);
+    if should_update {
+        last_update.insert(id.to_string(), now);
+        meter_data.write().insert(id.to_string(), percent as u8);
+    }
+}
+
+/// Bring one action's device and meter up to date with the live backends, returning its label
+/// when that has changed since the last frame.
+fn refresh_action(
+    state: &mut ActionState,
+    status: Option<&Status>,
+    meter_data: &RwLock<HashMap<String, u8>>,
+    pulse: &crate::pulse::PulseBackend,
+    focus: &crate::focus::FocusTracker,
+) -> Option<String> {
+    let device_id = state.config.device_id.as_deref()?;
+    let is_app = DeckWeaverCore::is_app_device(device_id);
+
+    // App actions resolve against the sound server instead of the PipeWeaver status, keyed off
+    // the `app:` prefix in the device id.
+    state.device = if is_app {
+        let app = pulse.app_for(device_id, focus);
+        // Routing and icon are properties of whichever app is resolved right now, which changes
+        // under a focus-following action, so they are refreshed every frame rather than at
+        // configure time.
+        state.config.routed_to = app.as_ref().and_then(|a| a.routed_to.clone());
+        state.config.app_icon_path = app.as_ref().and_then(|a| {
+            crate::icon_loader::find_icon_for_app(
+                a.icon_name.as_deref(),
+                &a.name,
+                Some(&a.key),
+                a.steam_app_id.as_deref(),
+            )
+        });
+        app.map(|a| a.to_device())
+    } else {
+        let config = &state.config;
+        status.and_then(|st| {
+            let device = st.get_device(device_id, config.device_type).or_else(|| {
+                if config.action_type == ActionType::Slider {
+                    st.get_device(device_id, None)
+                } else {
+                    None
+                }
+            })?;
+            let mut device = device.with_selected_source_mix(config.source_mix_b);
+            // A route toggle reads "muted" while the route is off.
+            if let Some(target_id) = config.route_target_id.as_deref() {
+                device.is_muted = !st.is_routed(&device.id, target_id);
+            }
+            Some(device)
+        })
+    };
+
+    // PipeWeaver devices take their level from the PipeWeaver meter feed; app streams take
+    // theirs from the PulseAudio peak monitors, resolved through the same app the key is
+    // currently controlling.
+    if !state.config.meters_enabled {
+        state.set_meter(0);
+    } else if is_app {
+        let level = state
+            .device
+            .as_ref()
+            .and_then(|d| crate::pulse::app_key_from_device_id(&d.id))
+            .map(|key| pulse.peak(key))
+            .unwrap_or(0);
+        state.set_meter(level);
+    } else if let Some(&meter) = meter_data.read().get(device_id) {
+        state.set_meter(meter);
+    }
+
+    // A route toggle's label names both ends so the key says what it connects. Only the label:
+    // the device keeps its own name, which is also what the host shows as the selected source.
+    let device = state.device.as_ref()?;
+    let label = status
+        .zip(state.config.route_target_id.as_deref())
+        .and_then(|(st, target_id)| st.get_device(target_id, Some(DeviceType::Target)))
+        .map(|target| format!("{}\n→ {}", device.name, target.name))
+        .unwrap_or_else(|| device.name.clone());
+    state.label_changed(Some(&label)).then_some(label)
+}
+
+fn queue_labels(
+    pending_updates: &RwLock<HashMap<String, PendingUpdate>>,
+    label_updates: Vec<(String, String)>,
+) {
+    if label_updates.is_empty() {
+        return;
+    }
+    let mut updates = pending_updates.write();
+    for (action_id, label) in label_updates {
+        if updates.get(&action_id).and_then(|u| u.label.as_ref()) != Some(&label) {
+            updates.entry(action_id).or_default().label = Some(label);
+        }
+    }
+}
+
+fn queue_image(
+    pending_updates: &RwLock<HashMap<String, PendingUpdate>>,
+    action_id: String,
+    (bytes, width, height): Frame,
+) {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    let image_hash = hasher.finish();
+
+    let mut updates = pending_updates.write();
+    if updates.get(&action_id).and_then(|u| u.image_hash) != Some(image_hash) {
+        let update = updates.entry(action_id).or_default();
+        update.image = Some(bytes);
+        update.width = Some(width);
+        update.height = Some(height);
+        update.image_hash = Some(image_hash);
+    }
+}
+
+/// Everything one action needs to draw a frame, snapshotted under the actions lock so the
+/// drawing itself runs without holding it.
+struct RenderTask {
+    action_id: String,
+    config: ActionConfig,
+    device: Option<Device>,
+    meter: u8,
+    cached_icon: Option<CachedIcon>,
+    cached_knob_base: Option<CachedBaseRender>,
+    /// A metering knob whose cached base is stale and has to be redrawn this frame.
+    needs_knob_base_rebuild: bool,
+    is_app_action: bool,
+    available: bool,
+}
+
+impl RenderTask {
+    fn snapshot(
+        action_id: &str,
+        s: &ActionState,
+        pipeweaver_available: bool,
+        pulse_available: bool,
+    ) -> Self {
+        let max_icon_size = match s.config.action_type {
+            ActionType::Knob => KNOB_ICON_SIZE,
+            _ => (s.config.width as f32) * 0.5,
+        };
+        // Explicit user choice first, the app's own icon only as a fallback, so setting a custom
+        // icon always overrides it.
+        let icon_path = s
+            .config
+            .icon_path
+            .as_deref()
+            .or(s.config.app_icon_path.as_deref());
+        let cached_icon = s.get_cached_icon(s.config.icon_png.as_deref(), icon_path, max_icon_size);
+
+        let uses_knob_meter_cache =
+            s.config.action_type == ActionType::Knob && s.config.meters_enabled;
+        let needs_knob_base_rebuild = uses_knob_meter_cache && s.needs_base_rebuild();
+        let cached_knob_base = if uses_knob_meter_cache && !needs_knob_base_rebuild {
+            s.cached_base.read().clone()
+        } else {
+            None
+        };
+
+        // Each action is gated on the backend it actually talks to, so a dead PipeWeaver
+        // connection no longer blanks the app actions (and vice versa).
+        let is_app_action = s
+            .config
+            .device_id
+            .as_deref()
+            .is_some_and(DeckWeaverCore::is_app_device);
+        let available = if is_app_action {
+            pulse_available
+        } else {
+            pipeweaver_available
+        };
+
+        // Tint the bar with the app's own icon, so a key reads as that app at a glance. Only when
+        // nothing more specific applies: an explicit volume_bar_color still wins in
+        // `accent_color`, and a PipeWeaver device keeps whatever colour PipeWeaver assigned it.
+        let mut device = s.device.clone();
+        if is_app_action
+            && let Some(dev) = device.as_mut()
+            && dev.color.is_none()
+            && let Some((red, green, blue)) = cached_icon.as_ref().and_then(|icon| icon.accent)
+        {
+            dev.color = Some(crate::devices::DeviceColor { red, green, blue });
+        }
+
+        Self {
+            action_id: action_id.to_string(),
+            config: s.config.clone(),
+            device,
+            meter: s.get_meter(),
+            cached_icon,
+            cached_knob_base,
+            needs_knob_base_rebuild,
+            is_app_action,
+            available,
+        }
+    }
+}
+
+/// Redraw a metering knob's base (everything but the meter) and store it on the action.
+fn rebuild_knob_base(
+    renderers: &mut Renderers,
+    actions: &RwLock<HashMap<String, ActionState>>,
+    task: &RenderTask,
+) -> Option<CachedBaseRender> {
+    let device = task.device.as_ref()?;
+    let config = &task.config;
+    let params = knob_render_params(config, device, 0);
+    let pixmap = renderers.knob(config.width, config.height).render_base(
+        &params,
+        config.icon_png.clone(),
+        task.cached_icon.as_ref(),
+    )?;
+
+    let guard = actions.read();
+    let state = guard.get(&task.action_id)?;
+    let cached = CachedBaseRender {
+        pixmap,
+        base_hash: state.base_hash(),
+    };
+    *state.cached_base.write() = Some(cached.clone());
+    Some(cached)
+}
+
+fn render_task(
+    renderers: &mut Renderers,
+    actions: &RwLock<HashMap<String, ActionState>>,
+    status: &RwLock<Option<Status>>,
+    task: &RenderTask,
+) -> Option<Frame> {
+    let config = &task.config;
+    let rebuilt_base;
+    let cached_knob_base = if task.needs_knob_base_rebuild {
+        rebuilt_base = rebuild_knob_base(renderers, actions, task);
+        rebuilt_base.as_ref()
+    } else {
+        task.cached_knob_base.as_ref()
+    };
+
+    if !task.available {
+        if task.is_app_action {
+            // No sound server is a real fault, but the app actions should not suddenly sprout a
+            // red cross across the deck for it either.
+            renderers.render_idle(config, "No audio server")
+        } else {
+            renderers.render_unavailable(config)
+        }
+    } else if let Some(ref dev) = task.device {
+        renderers.render_with_cached(
+            config,
+            dev,
+            task.meter,
+            task.cached_icon.as_ref(),
+            cached_knob_base,
+        )
+    } else if config.device_id.is_some()
+        // An app that is not currently playing has no stream to control, and the sound server is
+        // already known good here, so this is a settled "nothing to show" rather than a state
+        // still being fetched.
+        && (task.is_app_action || status.read().is_some())
+    {
+        if task.is_app_action {
+            // Nothing playing is the resting state of a focus-following knob, not a fault, so
+            // it says so rather than showing an error.
+            renderers.render_idle(config, "No sound playing")
+        } else {
+            renderers.render_unavailable(config)
+        }
+    } else {
+        renderers.render_loading(config)
+    }
+}
+
+fn handle_ws_message(text: &str, status: &RwLock<Option<Status>>) {
     let Ok(response) = serde_json::from_str::<Value>(text) else {
         let preview: String = text.chars().take(200).collect();
         tracing::warn!(
@@ -1165,10 +1086,8 @@ fn handle_ws_message(text: &str, status: &Arc<RwLock<Option<Status>>>) {
 
     if let Some(status_data) = response.get("data").and_then(|d| d.get("Status")) {
         if let Ok(new_status) = serde_json::from_value::<Status>(status_data.clone()) {
-            let s = new_status;
-            s.rebuild_index();
-            let mut status_guard = status.write();
-            *status_guard = Some(s);
+            new_status.rebuild_index();
+            *status.write() = Some(new_status);
         } else {
             tracing::warn!("Failed to deserialize Status");
         }
@@ -1183,7 +1102,7 @@ fn handle_ws_message(text: &str, status: &Arc<RwLock<Option<Status>>>) {
     }
 }
 
-fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
+fn apply_patch(status: &RwLock<Option<Status>>, patch: &[Value]) {
     let mut guard = status.write();
     let Some(current) = guard.as_mut() else {
         tracing::warn!("Cannot apply patch: status is None");
@@ -1202,9 +1121,8 @@ fn apply_patch(status: &Arc<RwLock<Option<Status>>>, patch: &[Value]) {
     }
 
     if let Ok(new_status) = serde_json::from_value::<Status>(value) {
-        let s = new_status;
-        s.rebuild_index();
-        *current = s;
+        new_status.rebuild_index();
+        *current = new_status;
     } else {
         tracing::error!("Failed to deserialize status after patch");
     }
@@ -1290,56 +1208,75 @@ fn slider_render_params(config: &ActionConfig, device: &Device, meter_value: u8)
     }
 }
 
-fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) -> Option<String> {
+/// The device a plain volume/mute command addresses: the configured type first, then whatever
+/// device carries that id.
+fn lookup_device(
+    status: &RwLock<Option<Status>>,
+    device_id: &str,
+    device_type: Option<DeviceType>,
+) -> Option<Device> {
+    let guard = status.read();
+    let status = guard.as_ref()?;
+    status
+        .get_device(device_id, device_type)
+        .or_else(|| status.get_device(device_id, None))
+}
+
+/// The device of exactly `device_type`, for commands that only exist for one of the two.
+fn typed_device(
+    status: &RwLock<Option<Status>>,
+    device_id: &str,
+    device_type: DeviceType,
+) -> Option<Device> {
+    status
+        .read()
+        .as_ref()?
+        .get_device(device_id, Some(device_type))
+}
+
+fn nudge_volume(volume: u8, delta: i8) -> u8 {
+    (volume as i16 + delta as i16).clamp(0, 100) as u8
+}
+
+/// Mix A volume for a source, the only volume for a target.
+fn set_volume_json(device_type: DeviceType, device_id: String, volume: u8) -> Value {
+    match device_type {
+        DeviceType::Source => {
+            serde_json::json!({"Pipewire": {"SetSourceVolume": [device_id, "A", volume]}})
+        }
+        DeviceType::Target => {
+            serde_json::json!({"Pipewire": {"SetTargetVolume": [device_id, volume]}})
+        }
+    }
+}
+
+fn build_command(status: &RwLock<Option<Status>>, id: u64, cmd: Command) -> Option<String> {
     let data = match cmd {
         Command::SetVolume {
             device_id,
             device_type,
             volume,
         } => {
-            let status_guard = status.read();
-            let status_ref = status_guard.as_ref()?;
-            let device = status_ref
-                .get_device(&device_id, device_type)
-                .or_else(|| status_ref.get_device(&device_id, None))?;
-            match device.device_type {
-                DeviceType::Source => {
-                    serde_json::json!({"Pipewire": {"SetSourceVolume": [device_id, "A", volume]}})
-                }
-                DeviceType::Target => {
-                    serde_json::json!({"Pipewire": {"SetTargetVolume": [device_id, volume]}})
-                }
-            }
+            let device = lookup_device(status, &device_id, device_type)?;
+            set_volume_json(device.device_type, device_id, volume)
         }
         Command::SetVolumeRelative {
             device_id,
             device_type,
             delta,
         } => {
-            let status_guard = status.read();
-            let status_ref = status_guard.as_ref()?;
-            let device = status_ref
-                .get_device(&device_id, device_type)
-                .or_else(|| status_ref.get_device(&device_id, None))?;
-            let new_volume = (device.volume as i16 + delta as i16).clamp(0, 100) as u8;
-            match device.device_type {
-                DeviceType::Source => {
-                    serde_json::json!({"Pipewire": {"SetSourceVolume": [device_id, "A", new_volume]}})
-                }
-                DeviceType::Target => {
-                    serde_json::json!({"Pipewire": {"SetTargetVolume": [device_id, new_volume]}})
-                }
-            }
+            let device = lookup_device(status, &device_id, device_type)?;
+            set_volume_json(
+                device.device_type,
+                device_id,
+                nudge_volume(device.volume, delta),
+            )
         }
         Command::ToggleMute {
             device_id,
             device_type,
         } => {
-            let status_guard = status.read();
-            let status_ref = status_guard.as_ref()?;
-            let device = status_ref
-                .get_device(&device_id, device_type)
-                .or_else(|| status_ref.get_device(&device_id, None))?;
+            let device = lookup_device(status, &device_id, device_type)?;
             match device.device_type {
                 DeviceType::Source => {
                     if device.is_muted {
@@ -1359,15 +1296,8 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
             mix_b,
             delta,
         } => {
-            let device = status
-                .read()
-                .as_ref()?
-                .get_device(&device_id, Some(DeviceType::Source))?;
-            if device.device_type != DeviceType::Source {
-                return None;
-            }
-            let current_volume = device.source_volume_for_mix(mix_b)?;
-            let new_volume = (current_volume as i16 + delta as i16).clamp(0, 100) as u8;
+            let device = typed_device(status, &device_id, DeviceType::Source)?;
+            let new_volume = nudge_volume(device.source_volume_for_mix(mix_b)?, delta);
             let mix = if mix_b { "B" } else { "A" };
             serde_json::json!({"Pipewire": {"SetSourceVolume": [device_id, mix, new_volume]}})
         }
@@ -1376,13 +1306,7 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
             mix_b,
             muted,
         } => {
-            let device = status
-                .read()
-                .as_ref()?
-                .get_device(&device_id, Some(DeviceType::Source))?;
-            if device.device_type != DeviceType::Source {
-                return None;
-            }
+            typed_device(status, &device_id, DeviceType::Source)?;
             let target = if mix_b { "TargetB" } else { "TargetA" };
             if muted {
                 serde_json::json!({"Pipewire": {"AddSourceMuteTarget": [device_id, target]}})
@@ -1391,34 +1315,16 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
             }
         }
         Command::SetSourceVolumesLinked { device_id, linked } => {
-            let device = status
-                .read()
-                .as_ref()?
-                .get_device(&device_id, Some(DeviceType::Source))?;
-            if device.device_type != DeviceType::Source {
-                return None;
-            }
+            typed_device(status, &device_id, DeviceType::Source)?;
             serde_json::json!({"Pipewire": {"SetSourceVolumeLinked": [device_id, linked]}})
         }
         Command::SetTargetMute { device_id, muted } => {
-            let device = status
-                .read()
-                .as_ref()?
-                .get_device(&device_id, Some(DeviceType::Target))?;
-            if device.device_type != DeviceType::Target {
-                return None;
-            }
+            typed_device(status, &device_id, DeviceType::Target)?;
             let state = if muted { "Muted" } else { "Unmuted" };
             serde_json::json!({"Pipewire": {"SetTargetMuteState": [device_id, state]}})
         }
         Command::SetTargetMix { device_id, mix_b } => {
-            let device = status
-                .read()
-                .as_ref()?
-                .get_device(&device_id, Some(DeviceType::Target))?;
-            if device.device_type != DeviceType::Target {
-                return None;
-            }
+            typed_device(status, &device_id, DeviceType::Target)?;
             let mix = if mix_b { "B" } else { "A" };
             serde_json::json!({"Pipewire": {"SetTargetMix": [device_id, mix]}})
         }
@@ -1440,21 +1346,35 @@ fn build_command(status: &Arc<RwLock<Option<Status>>>, id: u64, cmd: Command) ->
     serde_json::to_string(&serde_json::json!({ "id": id, "data": data })).ok()
 }
 
+/// One renderer per size, created on first use.
+#[derive(Default)]
 struct Renderers {
     knobs: HashMap<(u32, u32), KnobRenderer>,
     sliders: HashMap<u32, SliderRenderer>,
     buttons: HashMap<u32, ButtonRenderer>,
 }
 
-impl Renderers {
-    fn new() -> Self {
-        Self {
-            knobs: HashMap::new(),
-            sliders: HashMap::new(),
-            buttons: HashMap::new(),
+/// Run `$body` with `$r` bound to the renderer for `$config`'s action type and size.
+macro_rules! with_renderer {
+    ($renderers:expr, $config:expr, |$r:ident| $body:expr) => {
+        match $config.action_type {
+            ActionType::Knob => {
+                let $r = $renderers.knob($config.width, $config.height);
+                $body
+            }
+            ActionType::Slider => {
+                let $r = $renderers.slider($config.width);
+                $body
+            }
+            ActionType::Button => {
+                let $r = $renderers.button($config.width);
+                $body
+            }
         }
-    }
+    };
+}
 
+impl Renderers {
     fn knob(&mut self, width: u32, height: u32) -> &mut KnobRenderer {
         self.knobs
             .entry((width, height))
@@ -1474,38 +1394,16 @@ impl Renderers {
     }
 
     /// Dimmed "nothing to control" state, used for app actions in place of the fault cross.
-    fn render_idle(
-        &mut self,
-        config: &ActionConfig,
-        message: &str,
-    ) -> Option<(Vec<u8>, u32, u32)> {
-        match config.action_type {
-            ActionType::Knob => self
-                .knob(config.width, config.height)
-                .render_idle_internal(message),
-            ActionType::Slider => self.slider(config.width).render_idle_internal(message),
-            ActionType::Button => self.button(config.width).render_idle_internal(message),
-        }
+    fn render_idle(&mut self, config: &ActionConfig, message: &str) -> Option<Frame> {
+        with_renderer!(self, config, |r| r.render_idle_internal(message))
     }
 
-    fn render_unavailable(&mut self, config: &ActionConfig) -> Option<(Vec<u8>, u32, u32)> {
-        match config.action_type {
-            ActionType::Knob => self
-                .knob(config.width, config.height)
-                .render_unavailable_internal(),
-            ActionType::Slider => self.slider(config.width).render_unavailable_internal(),
-            ActionType::Button => self.button(config.width).render_unavailable_internal(),
-        }
+    fn render_unavailable(&mut self, config: &ActionConfig) -> Option<Frame> {
+        with_renderer!(self, config, |r| r.render_unavailable_internal())
     }
 
-    fn render_loading(&mut self, config: &ActionConfig) -> Option<(Vec<u8>, u32, u32)> {
-        match config.action_type {
-            ActionType::Knob => self
-                .knob(config.width, config.height)
-                .render_loading_internal(),
-            ActionType::Slider => self.slider(config.width).render_loading_internal(),
-            ActionType::Button => self.button(config.width).render_loading_internal(),
-        }
+    fn render_loading(&mut self, config: &ActionConfig) -> Option<Frame> {
+        with_renderer!(self, config, |r| r.render_loading_internal())
     }
 
     fn render_with_cached(
@@ -1513,9 +1411,9 @@ impl Renderers {
         config: &ActionConfig,
         device: &Device,
         meter_value: u8,
-        cached_icon: Option<&crate::action::CachedIcon>,
-        cached_knob_base: Option<&crate::action::CachedBaseRender>,
-    ) -> Option<(Vec<u8>, u32, u32)> {
+        cached_icon: Option<&CachedIcon>,
+        cached_knob_base: Option<&CachedBaseRender>,
+    ) -> Option<Frame> {
         match config.action_type {
             ActionType::Knob => {
                 let params = knob_render_params(config, device, meter_value);
@@ -1539,22 +1437,18 @@ impl Renderers {
                 )
             }
             ActionType::Button => {
-                let is_plus = if config.volume_step == 0 {
-                    None
-                } else if config.volume_step > 0 {
-                    Some(true)
-                } else {
-                    Some(false)
-                };
+                // A zero step is a mute toggle rather than a volume key, so it gets no +/- symbol.
+                let is_plus = (config.volume_step != 0).then_some(config.volume_step > 0);
+                let button = self.button(config.width);
                 if let Some(cached) = cached_icon {
-                    self.button(config.width).render_internal_png_with_cached(
+                    button.render_internal_png_with_cached(
                         is_plus,
                         Some(cached),
                         device.is_muted,
                         config.button_overlay,
                     )
                 } else {
-                    self.button(config.width).render_internal_png(
+                    button.render_internal_png(
                         is_plus,
                         config.icon_png.clone(),
                         device.is_muted,
