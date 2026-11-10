@@ -104,27 +104,13 @@ if [ "$BUILD_OD" = true ]; then
   echo "Generating Font Awesome icon manifest..."
   python3 "$SCRIPT_DIR/scripts/generate-fa-icons-json.py"
 
-  mkdir -p "$OD_BIN_DIR"
-  OD_BIN=""
-  for candidate in "target/$TARGET_SUBDIR/deckweaver-opendeck" target/$TARGET_SUBDIR/deps/deckweaver-*; do
-    if [ -f "$candidate" ] && [ -x "$candidate" ] && file "$candidate" | grep -q 'ELF.*executable'; then
-      OD_BIN="$candidate"
-      break
-    fi
-  done
-  if [ -z "$OD_BIN" ]; then
-    echo "Error: OpenDeck binary not found after build"
-    exit 1
-  fi
-  cp "$OD_BIN" "$OD_BIN_DIR/deckweaver"
-  chmod +x "$OD_BIN_DIR/deckweaver"
+  # The [[bin]] in crates/deckweaver-opendeck/Cargo.toml; OpenDeck runs it as "deckweaver".
+  install -Dm755 "target/$TARGET_SUBDIR/deckweaver-opendeck" "$OD_BIN_DIR/deckweaver"
 
   mkdir -p "$OD_PLUGIN_ROOT/icons"
-  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/plugin.png" 2>/dev/null || true
-  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/plugin@2x.png" 2>/dev/null || true
-  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/knob.png" 2>/dev/null || true
-  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/button.png" 2>/dev/null || true
-  cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/slider.png" 2>/dev/null || true
+  for icon in plugin plugin@2x knob button slider; do
+    cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/$icon.png"
+  done
 
   # Rebuilt from scratch: zip updates an existing archive in place, which would keep files
   # that have since been removed from the bundle.

@@ -74,7 +74,7 @@ jobs:
         # the core links against libpulse for app stream control
         run: |
           sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends libpulse-dev zip rsync file
+          sudo apt-get install -yq --no-install-recommends libpulse-dev zip rsync
 
       - name: Test
         # --locked: Cargo.lock pins the pipeweaver git dependencies (see .gitignore); a stale lockfile fails here

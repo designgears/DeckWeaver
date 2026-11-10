@@ -12,7 +12,7 @@
 #   deckweaver-opendeck-VERSION.streamDeckPlugin   install from OpenDeck's plugin manager ("Install from file")
 #   SHA256SUMS
 #
-# Needs: cargo, python3, zip, rsync, file, libpulse headers (libpulse-dev / libpulse).
+# Needs: cargo, python3, zip, rsync, libpulse headers (libpulse-dev / libpulse).
 # ALLOW_DIRTY=1 builds from a tree with uncommitted changes (for trying the script out; not for releases).
 set -euo pipefail
 version=${1:?usage: ./release.sh VERSION}
