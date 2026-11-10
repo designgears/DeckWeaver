@@ -1,78 +1,37 @@
 use log::info;
 use openaction::*;
 
+use super::{DeckAction, Inspector};
 use crate::knob_touch::{handle_dial_down, handle_dial_up, handle_touch_press};
-use crate::shared::{
-    dimensions_for_instance, register_instance, unregister_instance, update_instance,
-    ActionSettings,
-};
+use crate::shared::ActionSettings;
 use deckweaver_core::ActionType;
 
 pub struct KnobAction;
 
 #[async_trait]
-impl Action for KnobAction {
+impl DeckAction for KnobAction {
     const UUID: &'static str = "com.designgears.deckweaver.knob";
-    type Settings = ActionSettings;
+    const ACTION_TYPE: ActionType = ActionType::Knob;
+    const INSPECTOR: Inspector = Inspector::Devices;
 
-    async fn will_appear(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let (width, height) = dimensions_for_instance(instance, ActionType::Knob);
-        let mut settings = settings.clone();
-        settings.volume_step = Some(settings.normalized_volume_step(false, 5, 1, 20));
-        register_instance(instance, ActionType::Knob, &settings, width, height);
-        Ok(())
+    fn render_settings(settings: &ActionSettings) -> ActionSettings {
+        settings.with_volume_step(settings.knob_volume_step())
     }
 
-    async fn will_disappear(
-        &self,
-        instance: &Instance,
-        _settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        unregister_instance(instance);
-        Ok(())
-    }
-
-    async fn did_receive_settings(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let mut settings = settings.clone();
-        settings.volume_step = Some(settings.normalized_volume_step(false, 5, 1, 20));
-        update_instance(instance, ActionType::Knob, &settings);
-        Ok(())
-    }
-
-    async fn dial_rotate(
-        &self,
-        _instance: &Instance,
-        settings: &Self::Settings,
-        ticks: i16,
-        _pressed: bool,
-    ) -> OpenActionResult<()> {
+    async fn dial_rotate(&self, settings: &ActionSettings, ticks: i16) -> OpenActionResult<()> {
         let Some(device_id) = settings.device_id.as_deref() else {
             return Ok(());
         };
-        let step = settings.normalized_volume_step(false, 5, 1, 20) as i16;
+        let step = settings.knob_volume_step() as i16;
         // Clamped before narrowing: a fast spin (20% x 7 detents) would otherwise wrap past
         // i8::MAX and turn a big volume-up into a volume-down. 100 covers the whole range anyway.
-        let delta = (step * ticks).clamp(-100, 100);
+        let delta = (step * ticks).clamp(-100, 100) as i8;
         let core_arc = crate::shared::core();
         let core = core_arc.lock();
-        let is_source = settings.device_type.as_deref() == Some("source");
-        if is_source {
-            let mix_b = settings.source_mix.as_deref() == Some("B");
-            core.set_source_volume_relative(device_id, mix_b, delta as i8);
+        if settings.device_type.as_deref() == Some("source") {
+            core.set_source_volume_relative(device_id, settings.is_mix_b(), delta);
         } else {
-            core.set_volume_relative(
-                device_id,
-                delta as i8,
-                settings.parse_device_type(),
-            );
+            core.set_volume_relative(device_id, delta, settings.parse_device_type());
         }
         Ok(())
     }
@@ -80,19 +39,18 @@ impl Action for KnobAction {
     async fn dial_down(
         &self,
         instance: &Instance,
-        settings: &Self::Settings,
+        settings: &ActionSettings,
     ) -> OpenActionResult<()> {
-        if settings.device_id.is_none() {
-            return Ok(());
+        if settings.device_id.is_some() {
+            handle_dial_down(instance, settings.clone());
         }
-        handle_dial_down(instance, settings.clone());
         Ok(())
     }
 
     async fn dial_up(
         &self,
         instance: &Instance,
-        settings: &Self::Settings,
+        settings: &ActionSettings,
     ) -> OpenActionResult<()> {
         if settings.device_id.is_none() {
             return Ok(());
@@ -103,35 +61,15 @@ impl Action for KnobAction {
     async fn touch_tap(
         &self,
         instance: &Instance,
-        settings: &Self::Settings,
-        _position: (u16, u16),
-        _hold: bool,
+        settings: &ActionSettings,
     ) -> OpenActionResult<()> {
         info!(
             "DeckWeaver touch-strip touched on {} (device_id={:?})",
             instance.instance_id, settings.device_id
         );
-        if settings.device_id.is_none() {
-            return Ok(());
+        if settings.device_id.is_some() {
+            handle_touch_press(instance, settings.clone()).await;
         }
-        handle_touch_press(instance, settings.clone()).await;
         Ok(())
-    }
-
-    async fn send_to_plugin(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-        payload: &serde_json::Value,
-    ) -> OpenActionResult<()> {
-        crate::shared::handle_pi_message(instance, ActionType::Knob, settings, payload).await
-    }
-
-    async fn property_inspector_did_appear(
-        &self,
-        instance: &Instance,
-        _settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        crate::shared::send_devices(instance).await
     }
 }

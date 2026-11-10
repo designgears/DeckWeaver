@@ -5,7 +5,7 @@ mod knob_touch;
 mod shared;
 
 use actions::{
-    AppButtonAction, AppKnobAction, AppSliderAction, ButtonAction, KnobAction,
+    AppButtonAction, AppKnobAction, AppSliderAction, ButtonAction, Deck, KnobAction,
     PhysicalSourceSwitchAction, RouteToggleAction, SliderAction, SourceSwitchAction,
 };
 use openaction::*;
@@ -24,15 +24,15 @@ async fn main() -> OpenActionResult<()> {
         }
     }
 
-    register_action(KnobAction).await;
-    register_action(ButtonAction).await;
-    register_action(SourceSwitchAction).await;
-    register_action(PhysicalSourceSwitchAction).await;
-    register_action(RouteToggleAction).await;
-    register_action(SliderAction).await;
-    register_action(AppKnobAction).await;
-    register_action(AppButtonAction).await;
-    register_action(AppSliderAction).await;
+    register_action(Deck(KnobAction)).await;
+    register_action(Deck(ButtonAction)).await;
+    register_action(Deck(SourceSwitchAction)).await;
+    register_action(Deck(PhysicalSourceSwitchAction)).await;
+    register_action(Deck(RouteToggleAction)).await;
+    register_action(Deck(SliderAction)).await;
+    register_action(Deck(AppKnobAction)).await;
+    register_action(Deck(AppButtonAction)).await;
+    register_action(Deck(AppSliderAction)).await;
 
     run(std::env::args().collect()).await
 }

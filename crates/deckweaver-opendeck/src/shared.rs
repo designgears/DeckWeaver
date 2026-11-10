@@ -46,7 +46,7 @@ fn spawn_update_loop(core: Arc<Mutex<DeckWeaverCore>>) {
             tokio::time::sleep(Duration::from_millis(33)).await;
             let updates = core.lock().get_pending_updates();
             for (action_id, update) in updates {
-                let Some(instance) = get_instance(action_id.clone()).await else {
+                let Some(instance) = get_instance(action_id).await else {
                     continue;
                 };
 
@@ -55,25 +55,21 @@ fn spawn_update_loop(core: Arc<Mutex<DeckWeaverCore>>) {
                     && let Some(height) = update.height
                     && let Some(data_uri) = rgba_to_data_uri(&bytes, width, height)
                 {
-                    // We're drawing, so what are we drawing to?
                     if controller_kind(&instance) == ControllerKind::Encoder {
-                        // We're drawing to an encoder, send the image to the layout
+                        // An encoder's LCD strip draws from the layout, fed by setFeedback.
                         let feedback = json!({"img": data_uri.clone()});
                         let _ = instance.set_feedback(&feedback).await;
-
-                        // setFeedback only reaches the LCD strip: OpenDeck's UI draws encoder
-                        // slots with the same square-canvas path as keypad keys, off the state
-                        // image, and never reads the parsed layout. Without this the UI is stuck
-                        // on the manifest's actionDefaultImage while the hardware animates.
-                        // Harmless for the strip itself: OpenDeck only falls back to these bytes
-                        // when an action has no encoder config, and while it does feed a differing
-                        // state image to the renderer as an icon override, that override is
-                        // dropped unless the layout declares an "icon" pixmap item (ours doesn't).
-                        let _ = instance.set_image(Some(data_uri), None).await;
-                    } else {
-                        // We're drawing to a button
-                        let _ = instance.set_image(Some(data_uri), None).await;
                     }
+                    // Keys draw from the state image, and encoders need it too: setFeedback only
+                    // reaches the LCD strip, while OpenDeck's UI draws encoder slots with the same
+                    // square-canvas path as keypad keys, off the state image, and never reads the
+                    // parsed layout. Without this the UI is stuck on the manifest's
+                    // actionDefaultImage while the hardware animates. Harmless for the strip
+                    // itself: OpenDeck only falls back to these bytes when an action has no
+                    // encoder config, and while it does feed a differing state image to the
+                    // renderer as an icon override, that override is dropped unless the layout
+                    // declares an "icon" pixmap item (ours doesn't).
+                    let _ = instance.set_image(Some(data_uri), None).await;
                 }
 
                 // If the label needs updating, do it now. Safe to send unconditionally: a title
@@ -151,10 +147,25 @@ impl ActionSettings {
     /// and the route toggle): a step of 0 makes the shared button renderer draw it without a
     /// +/- symbol.
     pub fn as_toggle_key(&self) -> Self {
+        self.with_volume_step(0)
+    }
+
+    /// A copy with `volume_step` resolved, as handed to the renderer.
+    pub fn with_volume_step(&self, step: i8) -> Self {
         Self {
-            volume_step: Some(0),
+            volume_step: Some(step),
             ..self.clone()
         }
+    }
+
+    /// Step for a volume key: -20..=20, where 0 is a mute toggle.
+    pub fn key_volume_step(&self) -> i8 {
+        self.normalized_volume_step(true, 5, -20, 20)
+    }
+
+    /// Step per knob detent: 1..=20. Direction comes from the rotation, so the sign is dropped.
+    pub fn knob_volume_step(&self) -> i8 {
+        self.normalized_volume_step(false, 5, 1, 20)
     }
 
     /// Time between repeated steps while a volume key is held, kept within a sane range so a
@@ -163,17 +174,25 @@ impl ActionSettings {
         let ms = self
             .hold_repeat_ms
             .unwrap_or(crate::key_repeat::DEFAULT_REPEAT_MS)
-            .clamp(crate::key_repeat::MIN_REPEAT_MS, crate::key_repeat::MAX_REPEAT_MS);
+            .clamp(
+                crate::key_repeat::MIN_REPEAT_MS,
+                crate::key_repeat::MAX_REPEAT_MS,
+            );
         std::time::Duration::from_millis(ms as u64)
     }
 
     /// Step for a slider half. Its sign picks the half (positive = top), so it can never be 0;
     /// an explicit 0 falls back to the default rather than producing a key that does nothing.
     pub fn slider_volume_step(&self) -> i8 {
-        match self.normalized_volume_step(true, 5, -20, 20) {
+        match self.key_volume_step() {
             0 => 5,
             step => step,
         }
+    }
+
+    /// Knob on a source: whether it addresses PipeWeaver's mix B rather than mix A.
+    pub fn is_mix_b(&self) -> bool {
+        self.source_mix.as_deref() == Some("B")
     }
 
     pub fn parse_device_type(&self) -> Option<CoreDeviceType> {
@@ -209,11 +228,9 @@ fn build_config(
     height: u32,
 ) -> ActionConfig {
     let mut config = ActionConfig::new(action_id, action_type, width, height);
-    let icon_path = if settings
-        .icon_fa
-        .as_ref()
-        .is_some_and(|slug| !slug.is_empty())
-    {
+    let icon_fa = settings.icon_fa.as_deref().filter(|slug| !slug.is_empty());
+    // A Font Awesome icon takes precedence over an image path.
+    let icon_path = if icon_fa.is_some() {
         None
     } else {
         settings.icon_path.clone()
@@ -231,7 +248,7 @@ fn build_config(
         settings.orientation.clone(),
     );
 
-    if let Some(slug) = settings.icon_fa.as_ref().filter(|slug| !slug.is_empty()) {
+    if let Some(slug) = icon_fa {
         config.icon_png = crate::fa_icons::fa_icon_to_png(slug);
     }
 
@@ -240,7 +257,7 @@ fn build_config(
 
     if action_type == ActionType::Knob {
         config.apply_knob_settings(
-            settings.source_mix.as_deref() == Some("B"),
+            settings.is_mix_b(),
             settings.mute_profile_index,
             settings.mute_profile_data(),
             settings.show_volume.unwrap_or(true),
@@ -265,32 +282,22 @@ pub fn build_config_for_instance(
     )
 }
 
-pub fn register_instance(
-    instance: &Instance,
-    action_type: ActionType,
-    settings: &ActionSettings,
-    width: u32,
-    height: u32,
-) {
-    let action_id = instance.instance_id.to_string();
-    let mut config = build_config(action_id.clone(), action_type, settings, width, height);
+pub fn register_instance(instance: &Instance, action_type: ActionType, settings: &ActionSettings) {
+    let mut config = build_config_for_instance(instance, action_type, settings);
+    let core_arc = core();
+    let core = core_arc.lock();
 
-    if config.device_type.is_none() {
-        if let Some(device_id) = config.device_id.as_deref() {
-            let core_arc = core();
-            config.device_type = core_arc
-                .lock()
-                .infer_device_type(device_id, action_type == ActionType::Button);
-        }
+    if config.device_type.is_none()
+        && let Some(device_id) = config.device_id.as_deref()
+    {
+        config.device_type = core.infer_device_type(device_id, action_type == ActionType::Button);
     }
 
-    core().lock().register_action(config);
+    core.register_action(config);
 }
 
 pub fn update_instance(instance: &Instance, action_type: ActionType, settings: &ActionSettings) {
-    let (width, height) = dimensions_for_instance(instance, action_type);
-    let action_id = instance.instance_id.to_string();
-    let config = build_config(action_id, action_type, settings, width, height);
+    let config = build_config_for_instance(instance, action_type, settings);
     core()
         .lock()
         .update_action(&instance.instance_id.to_string(), config);
@@ -359,8 +366,6 @@ pub fn unregister_instance(instance: &Instance) {
 
 pub async fn handle_pi_message(
     instance: &Instance,
-    _action_type: ActionType,
-    _settings: &ActionSettings,
     payload: &serde_json::Value,
 ) -> openaction::OpenActionResult<()> {
     match payload.get("event").and_then(|v| v.as_str()) {
@@ -389,25 +394,46 @@ mod tests {
 
     #[test]
     fn explicit_zero_is_a_mute_key_on_signed_actions() {
-        assert_eq!(with_step(Some(0)).normalized_volume_step(true, 5, -20, 20), 0);
+        assert_eq!(
+            with_step(Some(0)).normalized_volume_step(true, 5, -20, 20),
+            0
+        );
     }
 
     #[test]
     fn negative_steps_survive_on_signed_actions() {
-        assert_eq!(with_step(Some(-10)).normalized_volume_step(true, 5, -20, 20), -10);
-        assert_eq!(with_step(Some(-10)).normalized_volume_step(false, 5, 1, 20), 10);
+        assert_eq!(
+            with_step(Some(-10)).normalized_volume_step(true, 5, -20, 20),
+            -10
+        );
+        assert_eq!(
+            with_step(Some(-10)).normalized_volume_step(false, 5, 1, 20),
+            10
+        );
     }
 
     #[test]
     fn zero_falls_back_to_the_default_on_knobs() {
         // v0.7.4 persisted `"volume_step": 0` on every knob press; that must stay a 5% detent
-        assert_eq!(with_step(Some(0)).normalized_volume_step(false, 5, 1, 20), 5);
+        assert_eq!(
+            with_step(Some(0)).normalized_volume_step(false, 5, 1, 20),
+            5
+        );
     }
 
     #[test]
     fn toggle_keys_render_without_a_volume_symbol() {
         assert_eq!(with_step(None).as_toggle_key().volume_step, Some(0));
         assert_eq!(with_step(Some(7)).as_toggle_key().volume_step, Some(0));
+    }
+
+    #[test]
+    fn key_and_knob_steps_keep_their_zero_rules() {
+        assert_eq!(with_step(Some(0)).key_volume_step(), 0);
+        assert_eq!(with_step(Some(-30)).key_volume_step(), -20);
+        assert_eq!(with_step(Some(0)).knob_volume_step(), 5);
+        assert_eq!(with_step(Some(-30)).knob_volume_step(), 20);
+        assert_eq!(with_step(Some(3)).with_volume_step(9).volume_step, Some(9));
     }
 
     #[test]

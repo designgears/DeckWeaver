@@ -6,291 +6,126 @@
 
 use openaction::*;
 
-use crate::shared::{
-    dimensions_for_instance, register_instance, unregister_instance, ActionSettings,
-};
+use super::{DeckAction, Inspector, start_hold};
+use crate::shared::ActionSettings;
 use deckweaver_core::ActionType;
 
-/// Apply a press/rotate to the bound app. A step of zero means the key is a mute toggle, matching
-/// how the PipeWeaver button action reads its step.
-fn apply_step(settings: &ActionSettings, step: i8, ticks: i16) {
-    let Some(device_id) = settings.device_id.as_deref() else {
-        return;
-    };
-    let core_arc = crate::shared::core();
-    let core = core_arc.lock();
-
-    if step == 0 {
-        core.toggle_app_mute(device_id);
-    } else {
-        core.set_app_volume_relative(device_id, step as i16 * ticks);
+fn toggle_mute(settings: &ActionSettings) {
+    if let Some(device_id) = settings.device_id.as_deref() {
+        crate::shared::core().lock().toggle_app_mute(device_id);
     }
 }
 
 /// Step once on press and keep stepping while the key is held. A step of 0 is a mute toggle,
 /// handled on release instead, so it never repeats.
-fn start_hold(instance: &Instance, settings: &ActionSettings, step: i8) {
-    if step == 0 || settings.device_id.is_none() {
-        return;
-    }
-    let interval = settings.hold_repeat_interval();
-    let settings = settings.clone();
-    crate::key_repeat::start(instance.instance_id.to_string(), interval, move || {
-        apply_step(&settings, step, 1);
+fn start_app_hold(instance: &Instance, settings: &ActionSettings, step: i8) {
+    start_hold(instance, settings, step, |core, id, step| {
+        core.set_app_volume_relative(id, step as i16);
     });
 }
 
 pub struct AppKnobAction;
 
 #[async_trait]
-impl Action for AppKnobAction {
+impl DeckAction for AppKnobAction {
     const UUID: &'static str = "com.designgears.deckweaver.appknob";
-    type Settings = ActionSettings;
+    const ACTION_TYPE: ActionType = ActionType::Knob;
+    const INSPECTOR: Inspector = Inspector::Apps;
 
-    async fn will_appear(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let (width, height) = dimensions_for_instance(instance, ActionType::Knob);
-        let mut settings = settings.clone();
-        settings.volume_step = Some(settings.normalized_volume_step(false, 5, 1, 20));
-        register_instance(instance, ActionType::Knob, &settings, width, height);
-        Ok(())
+    fn render_settings(settings: &ActionSettings) -> ActionSettings {
+        settings.with_volume_step(settings.knob_volume_step())
     }
 
-    async fn will_disappear(
-        &self,
-        instance: &Instance,
-        _settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        crate::key_repeat::stop(&instance.instance_id.to_string());
-        unregister_instance(instance);
-        Ok(())
-    }
-
-    async fn did_receive_settings(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let mut settings = settings.clone();
-        settings.volume_step = Some(settings.normalized_volume_step(false, 5, 1, 20));
-        crate::shared::update_instance(instance, ActionType::Knob, &settings);
-        Ok(())
-    }
-
-    async fn dial_rotate(
-        &self,
-        _instance: &Instance,
-        settings: &Self::Settings,
-        ticks: i16,
-        _pressed: bool,
-    ) -> OpenActionResult<()> {
-        // Rotation always changes volume; a zero step here would make the dial inert, so the
-        // mute-on-zero convention deliberately does not apply.
-        let step = settings.normalized_volume_step(false, 5, 1, 20);
-        apply_step(settings, step.max(1), ticks);
+    /// Rotation always changes volume: the knob step is never 0, so the mute-on-zero convention
+    /// of the app button deliberately does not apply here.
+    async fn dial_rotate(&self, settings: &ActionSettings, ticks: i16) -> OpenActionResult<()> {
+        if let Some(device_id) = settings.device_id.as_deref() {
+            let step = settings.knob_volume_step() as i16;
+            crate::shared::core()
+                .lock()
+                .set_app_volume_relative(device_id, step * ticks);
+        }
         Ok(())
     }
 
     async fn dial_up(
         &self,
         _instance: &Instance,
-        settings: &Self::Settings,
+        settings: &ActionSettings,
     ) -> OpenActionResult<()> {
-        let Some(device_id) = settings.device_id.as_deref() else {
-            return Ok(());
-        };
-        crate::shared::core().lock().toggle_app_mute(device_id);
+        toggle_mute(settings);
         Ok(())
     }
 
     async fn touch_tap(
         &self,
         _instance: &Instance,
-        settings: &Self::Settings,
-        _position: (u16, u16),
-        _hold: bool,
+        settings: &ActionSettings,
     ) -> OpenActionResult<()> {
-        let Some(device_id) = settings.device_id.as_deref() else {
-            return Ok(());
-        };
-        crate::shared::core().lock().toggle_app_mute(device_id);
+        toggle_mute(settings);
         Ok(())
-    }
-
-    async fn property_inspector_did_appear(
-        &self,
-        instance: &Instance,
-        _settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        crate::shared::send_apps(instance).await
-    }
-
-    async fn send_to_plugin(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-        payload: &serde_json::Value,
-    ) -> OpenActionResult<()> {
-        crate::shared::handle_pi_message(instance, ActionType::Knob, settings, payload).await
     }
 }
 
 pub struct AppButtonAction;
 
 #[async_trait]
-impl Action for AppButtonAction {
+impl DeckAction for AppButtonAction {
     const UUID: &'static str = "com.designgears.deckweaver.appbutton";
-    type Settings = ActionSettings;
+    const ACTION_TYPE: ActionType = ActionType::Button;
+    const INSPECTOR: Inspector = Inspector::Apps;
 
-    async fn will_appear(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let (width, height) = dimensions_for_instance(instance, ActionType::Button);
-        let mut settings = settings.clone();
-        settings.volume_step = Some(settings.normalized_volume_step(true, 5, -20, 20));
-        register_instance(instance, ActionType::Button, &settings, width, height);
-        Ok(())
-    }
-
-    async fn will_disappear(
-        &self,
-        instance: &Instance,
-        _settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        crate::key_repeat::stop(&instance.instance_id.to_string());
-        unregister_instance(instance);
-        Ok(())
-    }
-
-    async fn did_receive_settings(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let mut settings = settings.clone();
-        settings.volume_step = Some(settings.normalized_volume_step(true, 5, -20, 20));
-        crate::shared::update_instance(instance, ActionType::Button, &settings);
-        Ok(())
+    fn render_settings(settings: &ActionSettings) -> ActionSettings {
+        settings.with_volume_step(settings.key_volume_step())
     }
 
     async fn key_down(
         &self,
         instance: &Instance,
-        settings: &Self::Settings,
+        settings: &ActionSettings,
     ) -> OpenActionResult<()> {
-        let step = settings.normalized_volume_step(true, 5, -20, 20);
-        start_hold(instance, settings, step);
+        start_app_hold(instance, settings, settings.key_volume_step());
         Ok(())
     }
 
-    /// A step of 0 makes the key a mute toggle, which fires once on release.
-    async fn key_up(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
+    /// A step of 0 makes the key a mute toggle, which fires once on release, matching how the
+    /// PipeWeaver button action reads its step.
+    async fn key_up(&self, instance: &Instance, settings: &ActionSettings) -> OpenActionResult<()> {
         crate::key_repeat::stop(&instance.instance_id.to_string());
-        if settings.normalized_volume_step(true, 5, -20, 20) == 0 {
-            apply_step(settings, 0, 1);
+        if settings.key_volume_step() == 0 {
+            toggle_mute(settings);
         }
         Ok(())
-    }
-
-    async fn property_inspector_did_appear(
-        &self,
-        instance: &Instance,
-        _settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        crate::shared::send_apps(instance).await
-    }
-
-    async fn send_to_plugin(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-        payload: &serde_json::Value,
-    ) -> OpenActionResult<()> {
-        crate::shared::handle_pi_message(instance, ActionType::Button, settings, payload).await
     }
 }
 
 pub struct AppSliderAction;
 
 #[async_trait]
-impl Action for AppSliderAction {
+impl DeckAction for AppSliderAction {
     const UUID: &'static str = "com.designgears.deckweaver.appslider";
-    type Settings = ActionSettings;
+    const ACTION_TYPE: ActionType = ActionType::Slider;
+    const INSPECTOR: Inspector = Inspector::Apps;
 
-    async fn will_appear(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let (width, height) = dimensions_for_instance(instance, ActionType::Slider);
-        let mut settings = settings.clone();
-        settings.volume_step = Some(settings.slider_volume_step());
-        register_instance(instance, ActionType::Slider, &settings, width, height);
-        Ok(())
-    }
-
-    async fn will_disappear(
-        &self,
-        instance: &Instance,
-        _settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        crate::key_repeat::stop(&instance.instance_id.to_string());
-        unregister_instance(instance);
-        Ok(())
-    }
-
-    async fn did_receive_settings(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        let mut settings = settings.clone();
-        settings.volume_step = Some(settings.slider_volume_step());
-        crate::shared::update_instance(instance, ActionType::Slider, &settings);
-        Ok(())
+    fn render_settings(settings: &ActionSettings) -> ActionSettings {
+        settings.with_volume_step(settings.slider_volume_step())
     }
 
     async fn key_down(
         &self,
         instance: &Instance,
-        settings: &Self::Settings,
+        settings: &ActionSettings,
     ) -> OpenActionResult<()> {
-        start_hold(instance, settings, settings.slider_volume_step());
+        start_app_hold(instance, settings, settings.slider_volume_step());
         Ok(())
     }
 
     async fn key_up(
         &self,
         instance: &Instance,
-        _settings: &Self::Settings,
+        _settings: &ActionSettings,
     ) -> OpenActionResult<()> {
         crate::key_repeat::stop(&instance.instance_id.to_string());
         Ok(())
-    }
-
-    async fn property_inspector_did_appear(
-        &self,
-        instance: &Instance,
-        _settings: &Self::Settings,
-    ) -> OpenActionResult<()> {
-        crate::shared::send_apps(instance).await
-    }
-
-    async fn send_to_plugin(
-        &self,
-        instance: &Instance,
-        settings: &Self::Settings,
-        payload: &serde_json::Value,
-    ) -> OpenActionResult<()> {
-        crate::shared::handle_pi_message(instance, ActionType::Slider, settings, payload).await
     }
 }
