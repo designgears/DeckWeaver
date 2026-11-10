@@ -89,7 +89,7 @@ CI runs the tests, builds both plugins with `release.sh`, and publishes the GitH
 | `deckweaver-opendeck-<version>.streamDeckPlugin` | OpenDeck |
 | `SHA256SUMS` | checksums |
 
-The version comes from the tag: it is stamped into `Cargo.toml` and the plugin manifests for the build only, so there is no version-bump commit. A tag with a pre-release part (`v0.8.0-beta.1`) publishes a pre-release. Pushes to `main` and pull requests build and test the same way, keeping the files as a workflow artifact without releasing; **Actions → Build → Run workflow** can also build (and optionally release) a given version.
+Versions live only in git tags: the repo's manifests say `0.0.0`, and every build stamps the real version into what it produces, so there is no version-bump commit. A release build takes it from its tag; a local `./build.sh` takes it from `git describe` (`scripts/version.sh`), e.g. `0.8.1-8-ge50c4f1` for 8 commits after v0.8.1, with `-dirty` for uncommitted changes. A tag with a pre-release part (`v0.8.0-beta.1`) publishes a pre-release. Pushes to `main` and pull requests build and test the same way, keeping the files as a workflow artifact without releasing; **Actions → Build → Run workflow** can also build (and optionally release) a given version.
 
 To build the release files locally: `./release.sh 0.8.0` (needs a clean tree; output in `out/0.8.0/`).
 

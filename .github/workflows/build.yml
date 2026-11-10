@@ -3,11 +3,11 @@
 #   push a tag v<VERSION>        builds VERSION and publishes a GitHub release with the files; notes list the merged PRs
 #                                and the issues closed since the previous tag (scripts/release-notes.sh)
 #   push to main, pull request   builds and tests; the files are kept as a workflow artifact, no release
-#   Actions > Build > Run        builds; "version" names it (default <Cargo version>-dev.g<commit>), "release" also
+#   Actions > Build > Run        builds; "version" names it (default from git describe, e.g. 0.8.1-8-ge50c4f1), "release" also
 #                                publishes v<version>
 #
-# A tag with a pre-release part (v0.8.0-beta.1) publishes a pre-release. Built files are never committed: the tag is
-# the release, and the version in the repo's manifests is stamped from it at build time.
+# A tag with a pre-release part (v0.8.0-beta.1) publishes a pre-release. Built files are never committed, and versions
+# live only in tags: the repo's manifests say 0.0.0, and the build stamps the real version into what it produces.
 name: Build
 
 on:
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 0.8.0); empty builds <Cargo version>-dev.g<commit>'
+        description: 'Version (e.g. 0.8.0); empty takes it from git describe (e.g. 0.8.1-8-ge50c4f1)'
         required: false
       release:
         description: 'Publish a GitHub release v<version>'
@@ -54,8 +54,7 @@ jobs:
           else v=$INPUT_VERSION; rel=${INPUT_RELEASE:-false}; fi
           if [ -z "$v" ]; then
             [ "$rel" = true ] && { echo "::error::a release needs a version"; exit 1; }
-            base=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
-            v=$base-dev.g${GITHUB_SHA::7}
+            v=$(scripts/version.sh)  # from the nearest tag, e.g. 0.8.1-8-ge50c4f1
           fi
           [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::'$v' is not MAJOR.MINOR.PATCH[-PRE]"; exit 1; }
           pre=false; [[ $v == *-* ]] && pre=true

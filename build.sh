@@ -18,15 +18,13 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-sync_version() {
-  VERSION=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
-  if [ -n "$VERSION" ]; then
-    sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-    sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" manifest.json
-    sed -i "s/\"Version\": \".*\"/\"Version\": \"$VERSION\"/" opendeck/com.designgears.deckweaver.sdPlugin/manifest.json
-  fi
-}
-sync_version
+# The version comes from the git tag (scripts/version.sh), not from a file in the repo. It is
+# compiled in through DECKWEAVER_VERSION and stamped into the built copies of the manifests only;
+# the tracked manifests keep a 0.0.0 placeholder.
+VERSION=$(scripts/version.sh)
+export DECKWEAVER_VERSION="$VERSION"
+# stamp_version FILE KEY: set the first "KEY": "..." in a JSON manifest to $VERSION
+stamp_version() { sed -i "0,/\"$2\": \"[^\"]*\"/s//\"$2\": \"$VERSION\"/" "$1"; }
 
 PROFILE="release"
 BUILD_SC=true
@@ -63,7 +61,7 @@ if [ "$PROFILE" = "clean" ]; then
   cargo clean
   rm -rf .venv-3.*
   rm -f deckweaver/_core*.so
-  rm -rf opendeck/com.designgears.deckweaver.sdPlugin/*/bin
+  rm -rf opendeck/com.designgears.deckweaver.sdPlugin/*-unknown-linux-gnu deckweaver.streamDeckPlugin
   echo "Clean complete!"
   exit 0
 fi
@@ -81,8 +79,12 @@ if [ "$PROFILE" = "release" ]; then
 fi
 
 HOST_TRIPLE="$(rustc -vV | awk '/^host: / {print $2}')"
-OD_PLUGIN_ROOT="opendeck/com.designgears.deckweaver.sdPlugin"
+OD_SOURCE="opendeck/com.designgears.deckweaver.sdPlugin"
+# The OpenDeck bundle is assembled here (sources + binary + stamped manifest), never in the tracked
+# plugin folder.
+OD_PLUGIN_ROOT="target/opendeck/com.designgears.deckweaver.sdPlugin"
 OD_BIN_DIR="$OD_PLUGIN_ROOT/$HOST_TRIPLE/bin"
+echo "DeckWeaver $VERSION"
 
 if [ "$BUILD_SC" = true ]; then
   echo "Building StreamController extension (PyO3)..."
@@ -104,10 +106,13 @@ if [ "$BUILD_OD" = true ]; then
   echo "Generating Font Awesome icon manifest..."
   python3 "$SCRIPT_DIR/scripts/generate-fa-icons-json.py"
 
+  rm -rf "$OD_PLUGIN_ROOT"
+  mkdir -p "$(dirname "$OD_PLUGIN_ROOT")"
+  # leftovers from builds that put the binary in the tracked folder are not copied
+  rsync -a --exclude='*-unknown-linux-gnu/' "$OD_SOURCE/" "$OD_PLUGIN_ROOT/"
+  stamp_version "$OD_PLUGIN_ROOT/manifest.json" Version
   # The [[bin]] in crates/deckweaver-opendeck/Cargo.toml; OpenDeck runs it as "deckweaver".
   install -Dm755 "target/$TARGET_SUBDIR/deckweaver-opendeck" "$OD_BIN_DIR/deckweaver"
-
-  mkdir -p "$OD_PLUGIN_ROOT/icons"
   for icon in plugin plugin@2x knob button slider; do
     cp -f store/Thumbnail.png "$OD_PLUGIN_ROOT/icons/$icon.png"
   done
@@ -115,7 +120,7 @@ if [ "$BUILD_OD" = true ]; then
   # Rebuilt from scratch: zip updates an existing archive in place, which would keep files
   # that have since been removed from the bundle.
   rm -f "$SCRIPT_DIR/deckweaver.streamDeckPlugin"
-  (cd opendeck && zip -qr "$SCRIPT_DIR/deckweaver.streamDeckPlugin" com.designgears.deckweaver.sdPlugin)
+  (cd "$(dirname "$OD_PLUGIN_ROOT")" && zip -qr "$SCRIPT_DIR/deckweaver.streamDeckPlugin" com.designgears.deckweaver.sdPlugin)
 
   echo "OpenDeck plugin bundle: $OD_PLUGIN_ROOT"
   echo "OpenDeck binary: $OD_BIN_DIR/deckweaver"
@@ -129,6 +134,7 @@ if [ "$INSTALL_SC" = true ]; then
     mkdir -p "$PLUGIN_DEST"
     rsync -a --exclude-from="$SCRIPT_DIR/scripts/streamcontroller-exclude.txt" \
       "$SCRIPT_DIR/" "$PLUGIN_DEST/"
+    stamp_version "$PLUGIN_DEST/manifest.json" version
   else
     echo "Note: StreamController plugins dir not found, skipping install"
   fi

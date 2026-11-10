@@ -20,7 +20,12 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 /// Per-device cap on how often a PipeWeaver meter reading is stored (30fps).
 const METER_THROTTLE: Duration = Duration::from_millis(33);
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The release version, stamped in by build.sh/release.sh (scripts/version.sh: the git tag). A plain
+/// `cargo build` falls back to the crate version, a 0.0.0 placeholder: versions live in tags.
+pub const VERSION: &str = match option_env!("DECKWEAVER_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 pub const DEFAULT_PORT: u16 = 14565;
 
 #[derive(Debug)]
