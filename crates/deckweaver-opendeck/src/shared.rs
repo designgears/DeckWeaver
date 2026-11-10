@@ -133,13 +133,28 @@ pub struct ActionSettings {
 }
 
 impl ActionSettings {
+    /// The step a key or dial should use. On a signed action (volume keys) an explicit 0 is kept,
+    /// because there it means "mute toggle". On an unsigned one (knobs) 0 means nothing, and
+    /// v0.7.4 wrote `"volume_step": 0` into every knob it touched, so 0 falls back to the default
+    /// there instead of becoming a 1% step.
     pub fn normalized_volume_step(&self, signed: bool, default: i8, min: i8, max: i8) -> i8 {
         let value = match self.volume_step {
             None => default,
+            Some(0) if !signed => default,
             Some(step) if !signed => step.saturating_abs(),
             Some(step) => step,
         };
         value.clamp(min, max)
+    }
+
+    /// Settings for a key that is a toggle rather than a volume step (the output/input switches
+    /// and the route toggle): a step of 0 makes the shared button renderer draw it without a
+    /// +/- symbol.
+    pub fn as_toggle_key(&self) -> Self {
+        Self {
+            volume_step: Some(0),
+            ..self.clone()
+        }
     }
 
     /// Time between repeated steps while a volume key is held, kept within a sane range so a
@@ -161,7 +176,7 @@ impl ActionSettings {
         }
     }
 
-    fn parse_device_type(&self) -> Option<CoreDeviceType> {
+    pub fn parse_device_type(&self) -> Option<CoreDeviceType> {
         match self.device_type.as_deref() {
             Some("source") => Some(CoreDeviceType::Source),
             Some("target") => Some(CoreDeviceType::Target),
@@ -220,11 +235,8 @@ fn build_config(
         config.icon_png = crate::fa_icons::fa_icon_to_png(slug);
     }
 
-    if let Some(target_id) = settings.route_target_id.clone().filter(|id| !id.is_empty()) {
-        // Drawn as a toggle (no +/- symbol), muted-looking while the route is off.
-        config.route_target_id = Some(target_id);
-        config.volume_step = 0;
-    }
+    // Route toggle only; the core draws the key muted-looking while the route is off.
+    config.route_target_id = settings.route_target_id.clone().filter(|id| !id.is_empty());
 
     if action_type == ActionType::Knob {
         config.apply_knob_settings(
@@ -384,6 +396,18 @@ mod tests {
     fn negative_steps_survive_on_signed_actions() {
         assert_eq!(with_step(Some(-10)).normalized_volume_step(true, 5, -20, 20), -10);
         assert_eq!(with_step(Some(-10)).normalized_volume_step(false, 5, 1, 20), 10);
+    }
+
+    #[test]
+    fn zero_falls_back_to_the_default_on_knobs() {
+        // v0.7.4 persisted `"volume_step": 0` on every knob press; that must stay a 5% detent
+        assert_eq!(with_step(Some(0)).normalized_volume_step(false, 5, 1, 20), 5);
+    }
+
+    #[test]
+    fn toggle_keys_render_without_a_volume_symbol() {
+        assert_eq!(with_step(None).as_toggle_key().volume_step, Some(0));
+        assert_eq!(with_step(Some(7)).as_toggle_key().volume_step, Some(0));
     }
 
     #[test]

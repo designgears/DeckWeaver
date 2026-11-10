@@ -56,10 +56,7 @@ impl Action for SliderAction {
             return Ok(());
         };
         let step = settings.slider_volume_step();
-        let device_type = settings.device_type.as_deref().map(|t| match t {
-            "source" => deckweaver_core::DeviceType::Source,
-            _ => deckweaver_core::DeviceType::Target,
-        });
+        let device_type = settings.parse_device_type();
         let interval = settings.hold_repeat_interval();
         crate::key_repeat::start(instance.instance_id.to_string(), interval, move || {
             crate::shared::core()

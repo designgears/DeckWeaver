@@ -22,11 +22,14 @@ notes=$(gh api "repos/$repo/releases/generate-notes" -f tag_name="v$version" -f 
   ${prev:+-f previous_tag_name="$prev"} --jq .body |
   awk '/^## New Contributors/{skip=1; next} skip && /^$/{skip=0; next} !skip')
 
-# Issue numbers from the commit messages, then from the PRs those commits came in through.
+# Issue numbers from the commit messages, then from the PRs those commits came in through (each PR once: a PR's
+# commits all point back to it).
 issues=$(git log --format=%B "$range" |
   grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[: ]+#[0-9]+' | grep -oE '[0-9]+$' || true)
-for sha in $(git rev-list "$range"); do
-  for pr in $(gh api "repos/$repo/commits/$sha/pulls" --jq '.[] | select(.merged_at != null) | .number'); do
+prs=$(for sha in $(git rev-list "$range"); do
+  gh api "repos/$repo/commits/$sha/pulls" --jq '.[] | select(.merged_at != null) | .number'
+done | sort -nu)
+for pr in $prs; do
     issues+=$'\n'$(gh api graphql -F owner="$owner" -F name="$name" -F pr="$pr" --jq \
       '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' -f query='
       query($owner: String!, $name: String!, $pr: Int!) {
@@ -34,7 +37,6 @@ for sha in $(git rev-list "$range"); do
           pullRequest(number: $pr) { closingIssuesReferences(first: 50) { nodes { number } } }
         }
       }')
-  done
 done
 
 closed=""

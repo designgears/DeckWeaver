@@ -869,20 +869,13 @@ impl DeckWeaverCore {
                                         device.with_selected_source_mix(state.config.source_mix_b)
                                     })
                                     .map(|mut device| {
-                                        // A route toggle reads "muted" while the route is off,
-                                        // and names both ends so the key says what it connects.
+                                        // A route toggle reads "muted" while the route is off.
                                         if let (Some(st), Some(target_id)) = (
                                             status_guard.as_ref(),
                                             state.config.route_target_id.as_deref(),
                                         ) {
                                             device.is_muted =
                                                 !st.is_routed(&device.id, target_id);
-                                            if let Some(target) = st
-                                                .get_device(target_id, Some(DeviceType::Target))
-                                            {
-                                                device.name =
-                                                    format!("{}\n→ {}", device.name, target.name);
-                                            }
                                         }
                                         device
                                     })
@@ -908,9 +901,22 @@ impl DeckWeaverCore {
                                 }
                             }
 
-                            if let Some(name) = state.device.as_ref().map(|d| d.name.as_str()) {
-                                if state.label_changed(Some(name)) {
-                                    label_updates.push((action_id, name.to_string()));
+                            // A route toggle's label names both ends so the key says what it
+                            // connects. Only the label: the device keeps its own name, which is
+                            // also what the host shows as the selected source.
+                            let label = state.device.as_ref().map(|device| {
+                                status_guard
+                                    .as_ref()
+                                    .zip(state.config.route_target_id.as_deref())
+                                    .and_then(|(st, target_id)| {
+                                        st.get_device(target_id, Some(DeviceType::Target))
+                                    })
+                                    .map(|target| format!("{}\n→ {}", device.name, target.name))
+                                    .unwrap_or_else(|| device.name.clone())
+                            });
+                            if let Some(label) = label {
+                                if state.label_changed(Some(&label)) {
+                                    label_updates.push((action_id, label));
                                 }
                             }
                         }

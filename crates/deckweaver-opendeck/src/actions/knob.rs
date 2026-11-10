@@ -58,7 +58,9 @@ impl Action for KnobAction {
             return Ok(());
         };
         let step = settings.normalized_volume_step(false, 5, 1, 20) as i16;
-        let delta = step * ticks;
+        // Clamped before narrowing: a fast spin (20% x 7 detents) would otherwise wrap past
+        // i8::MAX and turn a big volume-up into a volume-down. 100 covers the whole range anyway.
+        let delta = (step * ticks).clamp(-100, 100);
         let core_arc = crate::shared::core();
         let core = core_arc.lock();
         let is_source = settings.device_type.as_deref() == Some("source");
@@ -69,10 +71,7 @@ impl Action for KnobAction {
             core.set_volume_relative(
                 device_id,
                 delta as i8,
-                settings.device_type.as_deref().map(|t| match t {
-                    "source" => deckweaver_core::DeviceType::Source,
-                    _ => deckweaver_core::DeviceType::Target,
-                }),
+                settings.parse_device_type(),
             );
         }
         Ok(())

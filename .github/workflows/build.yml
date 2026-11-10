@@ -30,8 +30,9 @@ permissions:
 
 concurrency:
   group: build-${{ github.ref }}
-  # a release is never cut short; branch and PR builds are superseded by the next push
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  # a release (a tag, or a manual run with "release") is never cut short; branch and PR builds are superseded by
+  # the next push
+  cancel-in-progress: ${{ github.ref_type != 'tag' && !inputs.release }}
 
 jobs:
   build:

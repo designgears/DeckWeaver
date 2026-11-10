@@ -253,6 +253,32 @@ function wireFaIconPicker() {
   });
 }
 
+// An empty or unreadable box means "use the default" (null), never 0: on a volume key 0 is a mute
+// toggle, so clearing the field must not quietly turn the key into one. Typed values are clamped
+// to the input's own min/max, which the browser does not enforce on typed input.
+function clampedNumber(input) {
+  if (input.value.trim() === "") return null;
+  const value = Math.round(Number(input.value));
+  if (!Number.isFinite(value)) return null;
+  const min = input.min === "" ? -Infinity : Number(input.min);
+  const max = input.max === "" ? Infinity : Number(input.max);
+  return Math.min(max, Math.max(min, value));
+}
+
+function volumeStepFromInput(input) {
+  const value = clampedNumber(input);
+  if (value !== null) input.value = String(value);
+  return value;
+}
+
+// Out-of-range values are clamped here too: the plugin reads this as an unsigned 32-bit number,
+// and a value it cannot read would make the whole action's settings fail to load.
+function holdRepeatFromInput(input) {
+  const value = clampedNumber(input);
+  input.value = String(value ?? 400);
+  return value;
+}
+
 function initActionInspector(options) {
   window.deckweaverPiOptions = options;
   if (options.showIconPicker !== false) {
@@ -269,11 +295,10 @@ function initActionInspector(options) {
     });
   });
   document.getElementById("volumeStep")?.addEventListener("change", (event) => {
-    saveSettings({ volume_step: Number(event.target.value) });
+    saveSettings({ volume_step: volumeStepFromInput(event.target) });
   });
   document.getElementById("holdRepeatMs")?.addEventListener("change", (event) => {
-    const value = Math.round(Number(event.target.value));
-    saveSettings({ hold_repeat_ms: Number.isFinite(value) && value > 0 ? value : null });
+    saveSettings({ hold_repeat_ms: holdRepeatFromInput(event.target) });
   });
   document.getElementById("orientation")?.addEventListener("change", (event) => {
     saveSettings({ orientation: event.target.value });
@@ -457,11 +482,10 @@ function initAppInspector(options) {
     saveSettings({ device_id: event.target.value || null, device_type: "source" });
   });
   document.getElementById("volumeStep")?.addEventListener("change", (event) => {
-    saveSettings({ volume_step: Number(event.target.value) });
+    saveSettings({ volume_step: volumeStepFromInput(event.target) });
   });
   document.getElementById("holdRepeatMs")?.addEventListener("change", (event) => {
-    const value = Math.round(Number(event.target.value));
-    saveSettings({ hold_repeat_ms: Number.isFinite(value) && value > 0 ? value : null });
+    saveSettings({ hold_repeat_ms: holdRepeatFromInput(event.target) });
   });
   document.getElementById("orientation")?.addEventListener("change", (event) => {
     saveSettings({ orientation: event.target.value });

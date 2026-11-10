@@ -141,18 +141,7 @@ if [ "$INSTALL_SC" = true ]; then
     echo "Installing StreamController plugin to $PLUGIN_DEST"
     rm -rf "$PLUGIN_DEST"
     mkdir -p "$PLUGIN_DEST"
-    rsync -a \
-      --exclude='.git' \
-      --exclude='target' \
-      --exclude='crates' \
-      --exclude='opendeck' \
-      --exclude='streamcontroller' \
-      --exclude='.venv*' \
-      --exclude='build.sh' \
-      --exclude='Cargo.toml' \
-      --exclude='Cargo.lock' \
-      --exclude='*.md' \
-      --exclude='.gitignore' \
+    rsync -a --exclude-from="$SCRIPT_DIR/scripts/streamcontroller-exclude.txt" \
       "$SCRIPT_DIR/" "$PLUGIN_DEST/"
   else
     echo "Note: StreamController plugins dir not found, skipping install"

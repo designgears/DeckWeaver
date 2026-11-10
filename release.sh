@@ -47,12 +47,7 @@ mkdir -p "$rel"
 stage=$(mktemp -d)
 mkdir -p "$stage/com_designgears_DeckWeaver"
 # The StreamController plugin is the repo minus the sources and the OpenDeck side, as build.sh --install lays it out.
-rsync -a \
-  --exclude='.git' --exclude='.github' --exclude='target' --exclude='crates' --exclude='opendeck' \
-  --exclude='streamcontroller' --exclude='.venv*' --exclude='build.sh' --exclude='release.sh' --exclude='scripts' \
-  --exclude='Cargo.toml' --exclude='Cargo.lock' --exclude='*.md' --exclude='.gitignore' --exclude='out' \
-  --exclude='__pycache__' --exclude='deckweaver.streamDeckPlugin' \
-  ./ "$stage/com_designgears_DeckWeaver/"
+rsync -a --exclude-from=scripts/streamcontroller-exclude.txt ./ "$stage/com_designgears_DeckWeaver/"
 [ -f "$stage/com_designgears_DeckWeaver/deckweaver/_core.abi3.so" ] || fail "the StreamController extension was not built"
 (cd "$stage" && zip -qr "$rel/deckweaver-streamcontroller-$version.zip" com_designgears_DeckWeaver)
 rm -rf "$stage"

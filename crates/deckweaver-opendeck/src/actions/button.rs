@@ -59,7 +59,7 @@ impl Action for ButtonAction {
         if step == 0 {
             return Ok(());
         }
-        let device_type = parse_device_type(settings);
+        let device_type = settings.parse_device_type();
         let interval = settings.hold_repeat_interval();
         crate::key_repeat::start(instance.instance_id.to_string(), interval, move || {
             crate::shared::core()
@@ -82,7 +82,7 @@ impl Action for ButtonAction {
         if settings.normalized_volume_step(true, 5, -20, 20) == 0 {
             crate::shared::core()
                 .lock()
-                .toggle_mute(device_id, parse_device_type(settings));
+                .toggle_mute(device_id, settings.parse_device_type());
         }
         Ok(())
     }
@@ -103,11 +103,4 @@ impl Action for ButtonAction {
     ) -> OpenActionResult<()> {
         crate::shared::handle_pi_message(instance, ActionType::Button, settings, payload).await
     }
-}
-
-fn parse_device_type(settings: &ActionSettings) -> Option<deckweaver_core::DeviceType> {
-    settings.device_type.as_deref().map(|t| match t {
-        "source" => deckweaver_core::DeviceType::Source,
-        _ => deckweaver_core::DeviceType::Target,
-    })
 }

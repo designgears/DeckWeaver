@@ -21,7 +21,7 @@ impl Action for RouteToggleAction {
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
         let (width, height) = dimensions_for_instance(instance, ActionType::Button);
-        register_instance(instance, ActionType::Button, settings, width, height);
+        register_instance(instance, ActionType::Button, &settings.as_toggle_key(), width, height);
         Ok(())
     }
 
@@ -39,7 +39,7 @@ impl Action for RouteToggleAction {
         instance: &Instance,
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
-        update_instance(instance, ActionType::Button, settings);
+        update_instance(instance, ActionType::Button, &settings.as_toggle_key());
         Ok(())
     }
 

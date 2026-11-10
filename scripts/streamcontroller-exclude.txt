@@ -1,0 +1,20 @@
+# What is left out of the StreamController plugin folder: the sources, the OpenDeck side and the
+# development files. One list for both build.sh --install and release.sh (rsync --exclude-from),
+# so a local install and the release zip have the same layout.
+.git
+.github
+target
+crates
+opendeck
+streamcontroller
+.venv*
+__pycache__
+build.sh
+release.sh
+scripts
+out
+Cargo.toml
+Cargo.lock
+*.md
+.gitignore
+deckweaver.streamDeckPlugin

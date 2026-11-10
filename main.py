@@ -354,52 +354,60 @@ class BaseAction(ActionBase):
         self._hold_timeout_id: Optional[int] = None
         self._hold_repeat_ms = DEFAULT_REPEAT_INTERVAL_MS
 
+    # Press-and-hold. Key events may arrive off the GTK main loop, so every change to the hold
+    # timer is queued onto it with GLib.idle_add: the press and its release are then applied in
+    # the order they happened, and the timer id is only ever touched from one thread. Only live
+    # GLib sources are ever stored in _hold_timeout_id, so _hold_stop can always remove it.
+
     def _hold_start(self, step_fn):
         """Step now, then keep stepping while the key is held, until `_hold_stop`."""
-        self._hold_stop()
+        GLib.idle_add(self._hold_start_main, step_fn)
+
+    def _hold_stop(self):
+        GLib.idle_add(self._hold_stop_main)
+
+    def _hold_stop_main(self):
+        if self._hold_timeout_id is not None:
+            GLib.source_remove(self._hold_timeout_id)
+            self._hold_timeout_id = None
+        return False
+
+    def _hold_start_main(self, step_fn):
+        self._hold_stop_main()
         remaining = [MAX_HOLD_REPEATS]
 
-        def step():
+        def step() -> bool:
             try:
                 step_fn()
+                return True
             except Exception as e:  # never let a failed step leave a timer running
                 log.error(f"DeckWeaver: hold step failed: {e}")
                 return False
-            return True
 
         def tick():
             remaining[0] -= 1
-            if remaining[0] < 0 or not step():
-                self._hold_timeout_id = None
-                return False
-            return True
+            if remaining[0] >= 0 and step():
+                return True
+            self._hold_timeout_id = None  # this source ends now
+            return False
 
         def begin():
-            self._hold_timeout_id = GLib.timeout_add(self._hold_repeat_ms, tick)
-            tick()
+            # the delay source ends here either way; the repeat source (if any) replaces it
+            if tick():
+                self._hold_timeout_id = GLib.timeout_add(self._hold_repeat_ms, tick)
             return False
 
         if step():
             self._hold_timeout_id = GLib.timeout_add(HOLD_DELAY_MS, begin)
+        return False
 
-    def _hold_stop(self):
-        if self._hold_timeout_id is not None:
-            GLib.source_remove(self._hold_timeout_id)
-            self._hold_timeout_id = None
-
-    def _handle_hold_key(self, event: Any, step_fn) -> bool:
-        """Drive a volume key's press-and-hold from its key events.
-
-        Returns True when the event was a press or release, so callers can ignore the
-        SHORT_UP that follows a quick tap (the press already stepped).
-        """
+    def _handle_hold_key(self, event: Any, step_fn):
+        """Drive a volume key's press-and-hold from its key events: step on press, repeat while
+        held, stop on release. The SHORT_UP after a quick tap is ignored (the press stepped)."""
         if event == Input.Key.Events.DOWN:
             self._hold_start(step_fn)
-            return True
-        if event in (Input.Key.Events.UP, getattr(Input.Key.Events, "HOLD_STOP", None)):
+        elif event in (Input.Key.Events.UP, getattr(Input.Key.Events, "HOLD_STOP", None)):
             self._hold_stop()
-            return True
-        return False
 
     @staticmethod
     def _normalize_hold_repeat_ms(value: Any) -> int:
