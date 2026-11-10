@@ -70,7 +70,28 @@ The Python extension uses PyO3's abi3 stable ABI and works on **any Python 3.11+
 - **StreamController:** `./build.sh release` or `pip install .` (maturin)
 - **OpenDeck:** copy or symlink `opendeck/com.designgears.deckweaver.sdPlugin` into your OpenDeck plugins directory, or use `--opendeck --install`
 
-**Version:** Set once in the workspace `Cargo.toml` (`[workspace.package] version`). The build script syncs it to `pyproject.toml`, `manifest.json`, and the OpenDeck manifest.
+Built files (`deckweaver/_core.abi3.so`, the OpenDeck binary, `deckweaver.streamDeckPlugin`) are not committed; `build.sh` writes them into the tree for local use and they are gitignored.
+
+## Releasing
+
+Releases are built by GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)). Push a tag and CI does the rest:
+
+```bash
+git tag v0.8.0
+git push origin v0.8.0
+```
+
+CI runs the tests, builds both plugins with `release.sh`, and publishes the GitHub release `v0.8.0` with:
+
+| File | For |
+|------|-----|
+| `deckweaver-streamcontroller-<version>.zip` | StreamController |
+| `deckweaver-opendeck-<version>.streamDeckPlugin` | OpenDeck |
+| `SHA256SUMS` | checksums |
+
+The version comes from the tag: it is stamped into `Cargo.toml` and the plugin manifests for the build only, so there is no version-bump commit. A tag with a pre-release part (`v0.8.0-beta.1`) publishes a pre-release. Pushes to `main` and pull requests build and test the same way, keeping the files as a workflow artifact without releasing; **Actions → Build → Run workflow** can also build (and optionally release) a given version.
+
+To build the release files locally: `./release.sh 0.8.0` (needs a clean tree; output in `out/0.8.0/`).
 
 ## Requirements
 
@@ -84,16 +105,15 @@ The Python extension uses PyO3's abi3 stable ABI and works on **any Python 3.11+
 
 ### StreamController
 
-1. Install the plugin through StreamController's plugin manager (or `./build.sh release --install`)
+1. Download `deckweaver-streamcontroller-<version>.zip` from the [latest release](https://github.com/designgears/DeckWeaver/releases/latest) and unzip it into StreamController's plugins folder (`~/.var/app/com.core447.StreamController/data/plugins/` for the Flatpak), or build and install from source with `./build.sh release --streamcontroller --install`
 2. Ensure PipeWeaver is running on `localhost:14565`
 3. Add a DeckWeaver action and configure devices in the plugin UI
 
 ### OpenDeck
 
-1. Run `./build.sh release --opendeck` (add `--install` to deploy it automatically)
-2. Place `opendeck/com.designgears.deckweaver.sdPlugin` in your OpenDeck plugins folder
-3. Restart OpenDeck / reload plugins
-4. Add a DeckWeaver action and configure it in the property inspector
+1. Download `deckweaver-opendeck-<version>.streamDeckPlugin` from the [latest release](https://github.com/designgears/DeckWeaver/releases/latest) and install it from OpenDeck's plugin manager, or build and install from source with `./build.sh release --opendeck --install`
+2. Restart OpenDeck / reload plugins
+3. Add a DeckWeaver action and configure it in the property inspector
 
 ## Usage
 

@@ -1,0 +1,101 @@
+# Builds DeckWeaver (the StreamController and OpenDeck plugins) with release.sh on GitHub's runners.
+#
+#   push a tag v<VERSION>        builds VERSION and publishes a GitHub release with the files (notes from the PRs/commits)
+#   push to main, pull request   builds and tests; the files are kept as a workflow artifact, no release
+#   Actions > Build > Run        builds; "version" names it (default <Cargo version>-dev.g<commit>), "release" also
+#                                publishes v<version>
+#
+# A tag with a pre-release part (v0.8.0-beta.1) publishes a pre-release. Built files are never committed: the tag is
+# the release, and the version in the repo's manifests is stamped from it at build time.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.8.0); empty builds <Cargo version>-dev.g<commit>'
+        required: false
+      release:
+        description: 'Publish a GitHub release v<version>'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  # a release is never cut short; branch and PR builds are superseded by the next push
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RELEASE: ${{ inputs.release }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=${GITHUB_REF_NAME#v}; rel=true
+          else v=$INPUT_VERSION; rel=${INPUT_RELEASE:-false}; fi
+          if [ -z "$v" ]; then
+            [ "$rel" = true ] && { echo "::error::a release needs a version"; exit 1; }
+            base=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
+            v=$base-dev.g${GITHUB_SHA::7}
+          fi
+          [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::'$v' is not MAJOR.MINOR.PATCH[-PRE]"; exit 1; }
+          pre=false; [[ $v == *-* ]] && pre=true
+          { echo "version=$v"; echo "release=$rel"; echo "prerelease=$pre"; } >> "$GITHUB_OUTPUT"
+          echo "Building $v (release: $rel, pre-release: $pre)"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Host packages
+        # the core links against libpulse for app stream control
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends libpulse-dev zip rsync file
+
+      - name: Test
+        # --locked: Cargo.lock pins the pipeweaver git dependencies (see .gitignore); a stale lockfile fails here
+        run: cargo test --workspace --locked
+
+      - name: Build
+        run: ./release.sh "${{ steps.v.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deckweaver-${{ steps.v.outputs.version }}
+          path: out/${{ steps.v.outputs.version }}/
+          retention-days: 14
+
+      - name: Release
+        if: steps.v.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+          PRE: ${{ steps.v.outputs.prerelease }}
+        run: |
+          gh release view "v$V" >/dev/null 2>&1 && { echo "::error::release v$V exists"; exit 1; }
+          flags=(); [ "$PRE" = true ] && flags+=(--prerelease)
+          # made as a draft so the files are attached before anyone can see it, then published
+          gh release create "v$V" --draft --target "$GITHUB_SHA" --title "DeckWeaver $V" --generate-notes "${flags[@]}" \
+            "out/$V/deckweaver-streamcontroller-$V.zip" \
+            "out/$V/deckweaver-opendeck-$V.streamDeckPlugin" \
+            "out/$V/SHA256SUMS"
+          gh release edit "v$V" --draft=false

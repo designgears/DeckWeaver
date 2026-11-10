@@ -257,3 +257,9 @@ Desktop.ini
 .streamdeck-plugin-cache/
 *.streamdeck-plugin
 reference
+
+# Build outputs: built by CI from a v* tag (release.sh) and published as release assets, never committed
+/out/
+/deckweaver.streamDeckPlugin
+/deckweaver/_core*.so
+/opendeck/com.designgears.deckweaver.sdPlugin/*-unknown-linux-gnu/
