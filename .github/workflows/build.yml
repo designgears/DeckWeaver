@@ -1,6 +1,7 @@
 # Builds DeckWeaver (the StreamController and OpenDeck plugins) with release.sh on GitHub's runners.
 #
-#   push a tag v<VERSION>        builds VERSION and publishes a GitHub release with the files (notes from the PRs/commits)
+#   push a tag v<VERSION>        builds VERSION and publishes a GitHub release with the files; notes list the merged PRs
+#                                and the issues closed since the previous tag (scripts/release-notes.sh)
 #   push to main, pull request   builds and tests; the files are kept as a workflow artifact, no release
 #   Actions > Build > Run        builds; "version" names it (default <Cargo version>-dev.g<commit>), "release" also
 #                                publishes v<version>
@@ -38,6 +39,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the release notes reach back to the previous tag
+          fetch-depth: 0
 
       - name: Version
         id: v
@@ -93,10 +97,9 @@ jobs:
         run: |
           gh release view "v$V" >/dev/null 2>&1 && { echo "::error::release v$V exists"; exit 1; }
           flags=(); [ "$PRE" = true ] && flags+=(--prerelease)
-          # GitHub's generated notes, minus "New Contributors": the maintainer pushes to main directly, so their
-          # first PR would otherwise list them as a new contributor to their own project
-          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="v$V" -f target_commitish="$GITHUB_SHA" \
-            --jq .body | awk '/^## New Contributors/{skip=1; next} skip && /^$/{skip=0; next} !skip' > "$RUNNER_TEMP/notes.md"
+          # GitHub's generated notes without "New Contributors", plus the issues this release closed
+          scripts/release-notes.sh "$V" "$GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
           # made as a draft so the files are attached before anyone can see it, then published
           gh release create "v$V" --draft --target "$GITHUB_SHA" --title "DeckWeaver $V" \
             --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}" \
