@@ -93,8 +93,13 @@ jobs:
         run: |
           gh release view "v$V" >/dev/null 2>&1 && { echo "::error::release v$V exists"; exit 1; }
           flags=(); [ "$PRE" = true ] && flags+=(--prerelease)
+          # GitHub's generated notes, minus "New Contributors": the maintainer pushes to main directly, so their
+          # first PR would otherwise list them as a new contributor to their own project
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="v$V" -f target_commitish="$GITHUB_SHA" \
+            --jq .body | awk '/^## New Contributors/{skip=1; next} skip && /^$/{skip=0; next} !skip' > "$RUNNER_TEMP/notes.md"
           # made as a draft so the files are attached before anyone can see it, then published
-          gh release create "v$V" --draft --target "$GITHUB_SHA" --title "DeckWeaver $V" --generate-notes "${flags[@]}" \
+          gh release create "v$V" --draft --target "$GITHUB_SHA" --title "DeckWeaver $V" \
+            --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}" \
             "out/$V/deckweaver-streamcontroller-$V.zip" \
             "out/$V/deckweaver-opendeck-$V.streamDeckPlugin" \
             "out/$V/SHA256SUMS"
