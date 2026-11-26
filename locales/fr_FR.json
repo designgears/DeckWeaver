@@ -46,6 +46,7 @@
     "ui.volume_step.subtitle": "Changement de volume par pas du cadran (5-20%)",
     "ui.show_volume.title": "Pourcentage du volume",
     "ui.show_volume.subtitle": "Afficher le pourcentage du volume sur l'écran de l'encodeur",
+    "ui.swap_press_and_tap.title": "Toucher l'écran pour couper le son, appuyer sur l'encodeur pour changer la cible de sourdine",
     
     "ui.refresh_devices.button": "Actualiser Périphériques",
     

@@ -131,6 +131,7 @@ To build the release files locally: `./release.sh 0.8.0` (needs a clean tree; ou
 - **Meters Enabled**: Toggle audio level meter display on/off
 - **Meter Color**: Customize meter color or invert volume bar color for meters
 - **Volume Bar Color**: Override volume bar color or use device color automatically
+- **Swap Press and Tap** (OpenDeck knob): Tap the touch strip to mute and press the dial to switch the mute target; holding the dial then toggles the mix
 - **Language**: Set interface language or use OS default (in plugin settings)
 - **Output Device Switch Button**: Pick a hardware output target and the physical device that should be attached when pressed
 - **Route Toggle Button**: Pick a source and a target; each press routes or un-routes that source into that target

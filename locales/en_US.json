@@ -63,6 +63,7 @@
     "ui.volume_step.subtitle": "Volume change per dial step (5-20%)",
     "ui.show_volume.title": "Volume Percentage",
     "ui.show_volume.subtitle": "Show the volume percentage on the encoder strip",
+    "ui.swap_press_and_tap.title": "Tap the strip to mute, press the dial to switch the mute target",
     
     "ui.refresh_devices.button": "Refresh Devices",
     

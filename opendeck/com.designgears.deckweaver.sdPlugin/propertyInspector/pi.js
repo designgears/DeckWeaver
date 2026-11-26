@@ -30,6 +30,7 @@ let iconComboboxOpen = false;
 function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, inActionInfo) {
   uuid = inUUID;
   actionInfo = JSON.parse(inActionInfo || "{}");
+  localize(inInfo);
   settings = actionInfo.payload?.settings || {};
   websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
   websocket.onopen = () => {
@@ -46,6 +47,31 @@ function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, 
       handlePluginMessage(message.payload || {});
     }
   };
+}
+
+const LOCALES = ["en_US", "de_DE", "es_ES", "fr_FR", "zh_CN"];
+
+// Replaces the text of every [data-i18n] element with that key from the bundled locales/ files
+// (shared with StreamController). The pages are written in English, so English needs no fetch,
+// and any failure leaves the English text in place.
+async function localize(inInfo) {
+  let language = "";
+  try {
+    language = JSON.parse(inInfo || "{}").application?.language || "";
+  } catch (_) {}
+  language = language.replace("-", "_");
+  const [lang] = language.split("_");
+  const locale = LOCALES.find((code) => code === language) || LOCALES.find((code) => code.startsWith(`${lang}_`));
+  if (!locale || locale === "en_US") return;
+  try {
+    const response = await fetch(`../locales/${locale}.json`);
+    if (!response.ok) return;
+    const strings = await response.json();
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
+      const text = strings[el.dataset.i18n];
+      if (text) el.textContent = text;
+    });
+  } catch (_) {}
 }
 
 function saveSettings(next) {
@@ -311,6 +337,7 @@ function wireVolumeInputs(options) {
   onChange("sourceMix", (input) => saveSettings({ source_mix: input.value }));
   onChange("metersEnabled", (input) => saveSettings({ meters_enabled: input.checked }));
   onChange("showVolume", (input) => saveSettings({ show_volume: input.checked }));
+  onChange("swapPressAndTap", (input) => saveSettings({ swap_press_and_tap: input.checked }));
   applyActionVisibility();
 }
 
@@ -391,6 +418,8 @@ function populateFromSettings() {
   if (metersEnabled) metersEnabled.checked = settings.meters_enabled !== false;
   const showVolume = document.getElementById("showVolume");
   if (showVolume) showVolume.checked = settings.show_volume !== false;
+  const swapPressAndTap = document.getElementById("swapPressAndTap");
+  if (swapPressAndTap) swapPressAndTap.checked = settings.swap_press_and_tap === true;
   applyActionVisibility();
   setSelectedIconDisplay(settings.icon_fa || null);
   if (iconComboboxOpen) renderIconComboboxList();

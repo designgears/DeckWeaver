@@ -12,9 +12,8 @@ use crate::shared::{ActionSettings, build_config_for_instance, core, update_inst
 
 const MUTE_PROFILE_COUNT: u8 = 2;
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(275);
-/// Holding the dial this long cycles the mute profile, right then, without waiting for the
-/// release. OpenDeck does not forward touch-strip taps, so the dial has to carry the gesture the
-/// strip carries on StreamController.
+/// Holding the dial this long fires the hold gesture right then, without waiting for the release:
+/// it cycles the mute profile, or toggles the mix when press and tap are swapped.
 const LONG_PRESS: Duration = Duration::from_millis(500);
 
 /// Timers armed by a dial press. An entry is present only while the press is still short: the
@@ -36,7 +35,13 @@ pub fn handle_dial_down(instance: &Instance, settings: ActionSettings) {
             return;
         };
         debug!("DeckWeaver knob long press on {}", task_id);
-        let _ = cycle_mute_profile(&instance, settings).await;
+        // Swapped: the strip tap took over mute, so the hold carries the mix toggle that the
+        // strip's double tap would otherwise have to wait for.
+        let _ = if settings.swaps_press_and_tap() {
+            toggle_knob_mix(&instance, settings).await
+        } else {
+            cycle_mute_profile(&instance, settings).await
+        };
     });
     if let Some(previous) = DIAL_HOLD_TIMERS.lock().insert(id, task) {
         previous.abort();
@@ -56,7 +61,11 @@ pub async fn handle_dial_up(
         return Ok(());
     };
     timer.abort();
-    toggle_active_profile_mute(instance, settings).await
+    if settings.swaps_press_and_tap() {
+        cycle_mute_profile(instance, settings).await
+    } else {
+        toggle_active_profile_mute(instance, settings).await
+    }
 }
 
 struct TouchTapState {
@@ -82,7 +91,15 @@ static TOUCH_TAP_STATES: Lazy<Mutex<HashMap<String, TouchTapState>>> =
 
 /// One tap cycles the mute profile and two taps within [`DOUBLE_TAP_WINDOW`] toggle the mix, so a
 /// first tap is held back until the window has passed without a second one.
+///
+/// With press and tap swapped a tap mutes straight away instead: there is no double tap to wait
+/// for, because the mix toggle moves to holding the dial.
 pub async fn handle_touch_press(instance: &Instance, settings: ActionSettings) {
+    if settings.swaps_press_and_tap() {
+        debug!("DeckWeaver knob tap (swapped) on {}", instance.instance_id);
+        let _ = toggle_active_profile_mute(instance, settings).await;
+        return;
+    }
     let instance_id = instance.instance_id.to_string();
     let now = Instant::now();
 

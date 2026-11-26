@@ -126,6 +126,9 @@ pub struct ActionSettings {
     pub route_target_id: Option<String>,
     /// Volume keys: milliseconds between steps while the key is held. `None` uses the default.
     pub hold_repeat_ms: Option<u32>,
+    /// Knob only. When set, a touch-strip tap toggles mute and a dial press cycles the mute
+    /// profile (hold toggles the mix), the reverse of the default. `None` means off.
+    pub swap_press_and_tap: Option<bool>,
 }
 
 impl ActionSettings {
@@ -188,6 +191,11 @@ impl ActionSettings {
             0 => 5,
             step => step,
         }
+    }
+
+    /// Knob: whether the dial press and the touch-strip tap trade jobs.
+    pub fn swaps_press_and_tap(&self) -> bool {
+        self.swap_press_and_tap.unwrap_or(false)
     }
 
     /// Knob on a source: whether it addresses PipeWeaver's mix B rather than mix A.

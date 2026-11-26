@@ -111,6 +111,8 @@ if [ "$BUILD_OD" = true ]; then
   # leftovers from builds that put the binary in the tracked folder are not copied
   rsync -a --exclude='*-unknown-linux-gnu/' "$OD_SOURCE/" "$OD_PLUGIN_ROOT/"
   stamp_version "$OD_PLUGIN_ROOT/manifest.json" Version
+  # The property inspector reads its translations from the same files StreamController uses.
+  cp -r "$SCRIPT_DIR/locales" "$OD_PLUGIN_ROOT/locales"
   # The [[bin]] in crates/deckweaver-opendeck/Cargo.toml; OpenDeck runs it as "deckweaver".
   install -Dm755 "target/$TARGET_SUBDIR/deckweaver-opendeck" "$OD_BIN_DIR/deckweaver"
   for icon in plugin plugin@2x knob button slider; do
